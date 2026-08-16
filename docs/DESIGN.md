@@ -72,8 +72,11 @@ Approved in [architecture discussion #1365][arch-1365], shipped in
 - User's remote ID: `0x008602`. Reference capture (manual mode, fire on,
   flame 5) recorded in the old `project_context.md`.
 - Reference implementation: [smartfire][smartfire] (Python, Proflame 2).
-  Marketing names (Proflame 2 / Proflame Pro / GTM…) are noisy; what matters
-  is our own captures already matched the smartfire packet structure.
+  Marketing names (Proflame 2 / Proflame Pro / GTM…) are noisy.
+- **Trust level: low.** Per user (2026-08-16), the previous protocol research
+  has known issues and unresolved gaps. Treat every bullet above as a
+  hypothesis; M1 includes a fresh wideband capture + analysis pass to
+  re-derive framing/checksum before any encoder is written.
 - Physical remote must stay in **manual mode** (thermostat mode makes it
   transmit autonomously and fight HA).
 
@@ -146,6 +149,16 @@ hangs off another machine's USB port. Hence a three-layer design.
 - **Deployment**: container via quadlet on the homelab server (HackRF on its
   USB), like thread-dashboard. Config: listen addr, RX frequency default,
   gains.
+- **Host selection (decided 2026-08-16)**: NOT the Pi 1 (`rpi`). It is a
+  Model B Rev 2: single-core ARMv6 700 MHz, no NEON, and one dwc_otg USB bus
+  shared by the LAN9512 Ethernet AND the Sonoff RCP driving an OTBR. HackRF's
+  minimum 2 Msps ≈ 4 MB/s sustained would saturate CPU with USB interrupts,
+  starve the RCP (spinel timeouts → OTBR flaps) and drop Ethernet. The
+  interference risk with Thread is bus/CPU contention, not RF (2.4 GHz vs
+  315 MHz). Fallback hosts if homelab RF range is insufficient: Pi Zero 2
+  W / Pi 3/4 (quad A53 + NEON handle 2 Msps OOK easily). ESP32 (any, incl.
+  C6) cannot host a HackRF: no/insufficient USB host (C6 has none; S2/S3 OTG
+  is 12 Mbps full-speed < 32 Mbps required).
 
 ### 3.2 `hackrf_proxy` — HA transmitter custom integration (thin)
 
@@ -167,8 +180,18 @@ Follows the `honeywell_string_lights` pattern exactly on the TX side:
 
 - Config flow: `async_get_transmitters(hass, 315_000_000, OOK)` → transmitter
   picker; plus remote ID (default from capture) and installer-relevant
-  options. Works with **any** 315 MHz-capable transmitter, not just ours
-  (e.g. a future CC1101 ESPHome node — nice resilience property).
+  options. Works with **any** 315 MHz-capable transmitter, not just ours.
+- **CC1101 endgame option**: ESPHome ≥2025.12 has an official [`cc1101`
+  component][esphome-cc1101] (SPI transceiver, 300–348/387–464/779–928 MHz,
+  OOK via remote_transmitter/remote_receiver), and ESPHome is already a
+  native `radio_frequency` transmitter. An ESP32-C6 + CC1101 (~$3 module)
+  near the fireplace could later become the dedicated permanent transceiver
+  — no daemon in the TX path at all — while the HackRF proxy remains the
+  general research/proxy tool. `aioesphomeapi` already defines
+  `RadioFrequencyCapability.RECEIVER`, so upstream ESPHome RX is being
+  plumbed; if/when it lands, RX state sync could migrate there too. The
+  transmitter-picker pattern makes the swap a config-flow change, not a
+  rewrite.
 - Entities (mirroring the fireplace's actual controls):
   - `light` main flame (brightness ↔ flame 0–6)
   - `fan` blower (percentage ↔ 0–6)
@@ -231,9 +254,11 @@ hackrf-proxy/
 
 ## 5. Milestones
 
-1. **M1 — daemon TX spike**: driver crate bake-off (seify-hackrfone vs
-   rs-hackrf), OOK burst TX from a timings JSON, CLI replay of the recorded
-   Proflame capture → does the fireplace respond? (Go/no-go for everything.)
+1. **M1 — spike: capture, re-verify protocol, TX**: driver crate bake-off
+   (seify-hackrfone vs rs-hackrf); capture the physical remote fresh
+   (previous protocol notes are untrusted) and re-derive framing/checksum;
+   OOK burst TX replay of a verified capture → does the fireplace respond?
+   (Go/no-go for everything.)
 2. **M2 — daemon proper**: WS API, half-duplex arbiter, RX → timing frames,
    quadlet deployment.
 3. **M3 — `hackrf_proxy` integration**: transmitter entity + availability;
@@ -258,5 +283,6 @@ hackrf-proxy/
 [dev-blog]: https://developers.home-assistant.io/blog/2026/04/24/radio-frequency-entity-platform/
 [rf-protocols]: https://github.com/home-assistant-libs/rf-protocols
 [smartfire]: https://github.com/johnellinwood/smartfire
+[esphome-cc1101]: https://esphome.io/components/cc1101/
 [seify-hackrfone]: https://github.com/MerchGuardian/seify-hackrfone
 [rs-hackrf]: https://lib.rs/crates/rs-hackrf
