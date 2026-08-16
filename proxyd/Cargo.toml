@@ -1,0 +1,23 @@
+[package]
+name = "hackrf-proxyd"
+version = "0.0.1"
+edition = "2021"
+description = "Network-attached HackRF transceiver proxy for Home Assistant (M1 spike)"
+license = "MIT OR Apache-2.0"
+
+[[bin]]
+name = "hrf"
+path = "src/main.rs"
+
+[dependencies]
+seify-hackrfone = "0.2"
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+env_logger = "0.11"
+log = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[profile.release]
+opt-level = 3
+lto = "thin"
