@@ -104,10 +104,6 @@ impl AmplitudeHistogram {
         self.peak
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.total == 0
-    }
-
     pub fn levels(&self, frac: f64) -> Levels {
         let noise_floor = percentile(&self.counts, self.total, 0.50);
         let signal = percentile(&self.counts, self.total, 0.999);
