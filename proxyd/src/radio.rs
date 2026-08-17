@@ -306,6 +306,160 @@ pub fn transmit(params: &TransmitParams, samples: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Gains and rate the daemon drives the radio with.
+#[derive(Debug, Clone, Copy)]
+pub struct DeviceSettings {
+    pub sample_rate: u32,
+    pub lna_db: u16,
+    pub vga_db: u16,
+    pub rx_amp: bool,
+}
+
+/// A real HackRF behind the arbiter's [`Transceiver`](crate::engine::Transceiver)
+/// trait.
+///
+/// The handle is opened lazily and dropped on failure, because the failure
+/// that matters here is a re-enumeration: after a USB reset the old handle is
+/// permanently dead and only a fresh open recovers. Holding on to it would
+/// turn a recoverable glitch into a daemon that never receives again.
+pub struct Device {
+    settings: DeviceSettings,
+    radio: Option<Arc<HackRf>>,
+    rx: Option<seify_hackrfone::RxStream>,
+}
+
+impl Device {
+    pub fn new(settings: DeviceSettings) -> Result<Self> {
+        validate_rx_gains(settings.lna_db, settings.vga_db)?;
+        validate_sample_rate(settings.sample_rate)?;
+        Ok(Self { settings, radio: None, rx: None })
+    }
+
+    fn handle(&mut self) -> Result<Arc<HackRf>> {
+        if let Some(radio) = &self.radio {
+            return Ok(Arc::clone(radio));
+        }
+        let radio = open()?;
+        self.radio = Some(Arc::clone(&radio));
+        Ok(radio)
+    }
+
+    /// Forget the handle so the next attempt opens the device afresh.
+    fn invalidate(&mut self) {
+        self.rx = None;
+        self.radio = None;
+    }
+
+    fn config(&self, frequency_hz: u64, txvga_db: u16, amp_enable: bool) -> Config {
+        Config {
+            lna_db: self.settings.lna_db,
+            vga_db: self.settings.vga_db,
+            txvga_db,
+            amp_enable,
+            antenna_enable: false,
+            frequency_hz,
+            sample_rate_hz: self.settings.sample_rate,
+            sample_rate_div: 1,
+        }
+    }
+}
+
+impl crate::engine::Transceiver for Device {
+    fn start_rx(&mut self, frequency_hz: u64) -> Result<()> {
+        let radio = self.handle()?;
+        let result = (|| {
+            radio.start_rx(&self.config(frequency_hz, 0, self.settings.rx_amp))?;
+            radio.start_rx_stream(TRANSFER_SIZE).context("failed to start RX stream")
+        })();
+        match result {
+            Ok(stream) => {
+                self.rx = Some(stream);
+                Ok(())
+            }
+            Err(error) => {
+                self.invalidate();
+                Err(error)
+            }
+        }
+    }
+
+    fn read(&mut self, out: &mut Vec<u8>) -> Result<()> {
+        let Some(stream) = self.rx.as_mut() else {
+            anyhow::bail!("read called with no receiver running");
+        };
+        match stream.read_sync(TRANSFER_SIZE) {
+            Ok(chunk) => {
+                out.clear();
+                out.extend_from_slice(chunk);
+                Ok(())
+            }
+            Err(error) => {
+                self.invalidate();
+                Err(anyhow::Error::new(error).context("RX stream failed"))
+            }
+        }
+    }
+
+    fn stop(&mut self) -> Result<()> {
+        self.rx = None;
+        let Some(radio) = &self.radio else {
+            return Ok(());
+        };
+        if let Err(error) = radio.stop() {
+            self.invalidate();
+            return Err(anyhow::Error::new(error).context("failed to stop the radio"));
+        }
+        Ok(())
+    }
+
+    fn transmit(&mut self, params: &crate::engine::TxParams, samples: &[u8]) -> Result<()> {
+        validate_tx_gain(params.txvga_db)?;
+        let radio = self.handle()?;
+
+        let result = (|| -> Result<()> {
+            radio.start_tx(&self.config(
+                params.frequency_hz,
+                params.txvga_db,
+                params.amp_enable,
+            ))?;
+            let mut stream = radio.start_tx_stream().context("failed to start TX stream")?;
+            for chunk in samples.chunks(TRANSFER_SIZE) {
+                stream.write_sync(chunk)?;
+            }
+            // write_sync only waits on completion once the queue is full, so
+            // the last transfers can still be pending when the stream drops
+            // and switches the transceiver off. Push silence through, so
+            // anything truncated is silence rather than the tail of a frame.
+            let flush = vec![0u8; TRANSFER_SIZE];
+            for _ in 0..IN_FLIGHT_TRANSFERS + 1 {
+                stream.write_sync(&flush)?;
+            }
+            Ok(())
+        })();
+
+        // The transmitter must never be left running, whatever happened.
+        if let Err(error) = radio.stop() {
+            self.invalidate();
+            return Err(anyhow::Error::new(error).context("failed to stop the transmitter"));
+        }
+        if result.is_err() {
+            self.invalidate();
+        }
+        result
+    }
+
+    fn describe(&mut self) -> Result<String> {
+        let radio = self.handle()?;
+        match (radio.board_id(), radio.version()) {
+            (Ok(board), Ok(firmware)) => Ok(format!("board {board}, firmware {firmware}")),
+            _ => {
+                self.invalidate();
+                anyhow::bail!("HackRF did not answer an identification request")
+            }
+        }
+    }
+}
+
 /// Pad a baseband buffer so every USB transfer is 512-byte aligned.
 pub fn pad_to_alignment(samples: &mut Vec<u8>) {
     let remainder = samples.len() % XFER_ALIGN;

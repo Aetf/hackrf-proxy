@@ -1,10 +1,12 @@
-//! hackrf-proxyd M1 spike CLI (`hrf`).
+//! `hrf`: the daemon and the research tools that built it.
 //!
-//! Standalone research tool, not the daemon yet. It exists to answer one
-//! question: can we capture the fireplace remote, understand its framing, and
-//! replay it? Capture and demodulation are separate commands on purpose —
-//! the remote gets pressed once, then the demodulator can be re-run offline
-//! with different settings as often as needed.
+//! `serve` is the daemon proper — a WebSocket radio proxy on the LAN. The rest
+//! are the bench tools the protocol was solved with, and they remain useful for
+//! exactly that: `capture` and `demod` are separate commands on purpose, so the
+//! remote gets pressed once and the demodulator can be re-run offline with
+//! different settings as often as needed.
+//!
+//! This binary is a thin shell. Everything worth testing lives in the library.
 
 use std::collections::BTreeMap;
 use std::fs::File;
@@ -13,10 +15,14 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{ensure, Context, Result};
 use clap::{Parser, Subcommand};
-use hackrf_proxyd::{ook, proflame, radio};
+use hackrf_proxyd::{engine, ook, proflame, radio, server};
 
 #[derive(Parser)]
-#[command(name = "hrf", about = "HackRF M1 spike: capture, demodulate and replay OOK")]
+#[command(
+    name = "hrf",
+    about = "A network-attached HackRF: serve it to Home Assistant, or capture, \
+             demodulate, decode and replay OOK by hand"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Command,
@@ -128,6 +134,48 @@ enum Command {
         /// Timings JSON file(s); repeatable.
         #[arg(long, value_name = "FILE", required = true)]
         r#in: Vec<PathBuf>,
+    },
+
+    /// Run the daemon: a WebSocket radio proxy on the LAN.
+    ///
+    /// Receives continuously by default, publishing every burst it hears as an
+    /// `rx_frame` event, and lets clients preempt with `transmit` requests.
+    /// Protocol-agnostic: it moves raw OOK timings and knows nothing about any
+    /// particular appliance.
+    Serve {
+        /// Address to listen on. Defaults to every interface, since the point
+        /// is to be reachable from Home Assistant.
+        #[arg(long, default_value = "0.0.0.0:8765")]
+        listen: String,
+        /// Frequency the receiver starts on.
+        #[arg(long, default_value = "315M", value_parser = parse_frequency)]
+        rx_freq: u64,
+        /// Start with the receiver silent, for a transmit-only deployment.
+        #[arg(long)]
+        no_rx: bool,
+        #[arg(long, default_value_t = 2_000_000)]
+        rate: u32,
+        /// RX LNA gain, 0..=40 dB in 8 dB steps.
+        #[arg(long, default_value_t = 40)]
+        lna: u16,
+        /// RX VGA gain, 0..=62 dB in 2 dB steps.
+        #[arg(long, default_value_t = 40)]
+        vga: u16,
+        /// Enable the front-end RX amplifier (+14 dB).
+        #[arg(long)]
+        rx_amp: bool,
+        /// Default TX VGA gain for requests that do not specify one. 30 dB
+        /// with the amplifier off is what ignited the fireplace at close
+        /// range; more is rarely useful indoors.
+        #[arg(long, default_value_t = 30)]
+        txvga: u16,
+        /// A space at least this long ends a received burst. The default suits
+        /// remotes that repeat a frame while a button is held.
+        #[arg(long, default_value_t = 3_000)]
+        gap_us: i64,
+        /// Ignore received bursts with fewer edges than this.
+        #[arg(long, default_value_t = 8)]
+        min_edges: usize,
     },
 
     /// Transmit OOK from a Flipper-RAW timings JSON array.
@@ -248,6 +296,30 @@ fn main() -> Result<()> {
             out_all: out_all.as_deref(),
         }),
         Command::Decode { r#in } => decode(&r#in),
+        Command::Serve {
+            listen,
+            rx_freq,
+            no_rx,
+            rate,
+            lna,
+            vga,
+            rx_amp,
+            txvga,
+            gap_us,
+            min_edges,
+        } => {
+            let settings =
+                radio::DeviceSettings { sample_rate: rate, lna_db: lna, vga_db: vga, rx_amp };
+            radio::validate_tx_gain(txvga)?;
+
+            let mut config = engine::Config::new(rate, rx_freq);
+            config.rx_enabled = !no_rx;
+            config.txvga_db = txvga;
+            config.detector.gap_us = gap_us;
+            config.detector.min_edges = min_edges;
+
+            serve(&listen, settings, config)
+        }
         Command::Transmit { freq, rate, txvga, amp, repeat, gap_us, file } => {
             transmit(freq, rate, txvga, amp, repeat, gap_us, &file)
         }
@@ -402,6 +474,81 @@ fn report_bursts(bursts: &[Vec<i64>], args: &DemodArgs<'_>) -> Result<()> {
     Ok(())
 }
 
+/// How many commands may queue for the radio thread.
+///
+/// This is the single-flight transmit queue: one transmission is in progress,
+/// a few may wait, and beyond that a client is told to back off rather than
+/// building an unbounded backlog of stale requests for a shared appliance.
+const COMMAND_QUEUE: usize = 16;
+
+/// Events buffered for clients that have fallen behind. A slow client loses
+/// old frames; it never slows the radio down.
+const EVENT_QUEUE: usize = 1024;
+
+/// Start the radio thread and the WebSocket server, and run until signalled.
+///
+/// The radio thread is a plain OS thread rather than a tokio task on purpose:
+/// the driver's I/O is blocking, and a transmission holds it for the best part
+/// of a second. Parking a runtime worker for that long would stall unrelated
+/// connections that happen to share it.
+fn serve(listen: &str, settings: radio::DeviceSettings, config: engine::Config) -> Result<()> {
+    let device = radio::Device::new(settings)?;
+
+    let (commands, command_queue) = tokio::sync::mpsc::channel(COMMAND_QUEUE);
+    let (events, _) = tokio::sync::broadcast::channel(EVENT_QUEUE);
+
+    let radio_thread = {
+        let events = events.clone();
+        std::thread::Builder::new()
+            .name("radio".into())
+            .spawn(move || engine::run(device, config, command_queue, events))
+            .context("failed to start the radio thread")?
+    };
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("failed to start the async runtime")?;
+
+    let outcome = runtime.block_on(async {
+        let listener = tokio::net::TcpListener::bind(listen)
+            .await
+            .with_context(|| format!("failed to listen on {listen}"))?;
+        let server = std::sync::Arc::new(server::Server { commands, events });
+        server::serve(listener, server, shutdown_signal()).await
+    });
+
+    // Dropping the runtime drops the command sender, which is what tells the
+    // radio thread to stop and put the transceiver down.
+    drop(runtime);
+    radio_thread.join().map_err(|_| anyhow::anyhow!("the radio thread panicked"))?;
+    outcome
+}
+
+/// Resolve on SIGINT or SIGTERM, so a container stops promptly and leaves the
+/// transmitter off.
+async fn shutdown_signal() {
+    let interrupt = tokio::signal::ctrl_c();
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut terminate = match signal(SignalKind::terminate()) {
+            Ok(stream) => stream,
+            Err(error) => {
+                log::warn!("cannot listen for SIGTERM: {error}");
+                let _ = interrupt.await;
+                return;
+            }
+        };
+        tokio::select! {
+            _ = interrupt => {}
+            _ = terminate.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = interrupt.await;
+}
+
 /// `demod --out` writes one burst, `--out-all` a list of bursts; accept both.
 #[derive(serde::Deserialize)]
 #[serde(untagged)]
@@ -511,16 +658,7 @@ fn transmit(
         .context("timings must be a JSON array of signed integers (microseconds)")?;
     ensure!(!timings.is_empty(), "no timings in {}", file.display());
 
-    let frame = ook::synthesize(&timings, rate, 100);
-    let gap = ook::synthesize(&[-i64::from(gap_us)], rate, 100);
-
-    let mut samples = Vec::with_capacity((frame.len() + gap.len()) * (repeat as usize + 1));
-    for iteration in 0..=repeat {
-        samples.extend_from_slice(&frame);
-        if iteration < repeat {
-            samples.extend_from_slice(&gap);
-        }
-    }
+    let mut samples = ook::render_transmission(&timings, repeat, gap_us, rate, 100);
     radio::pad_to_alignment(&mut samples);
 
     log::info!(

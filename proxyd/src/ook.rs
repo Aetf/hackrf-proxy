@@ -384,6 +384,12 @@ impl Detector {
         self.threshold
     }
 
+    /// Bursts discarded for having more edges than a frame plausibly holds —
+    /// the signature of a jammed band or a badly placed threshold.
+    pub fn overflows(&self) -> u64 {
+        self.accumulator.overflows()
+    }
+
     /// Feed one chunk of interleaved cs8, returning every burst it completed.
     pub fn push(&mut self, iq: &[u8]) -> Vec<Burst> {
         let mut bursts = Vec::new();
@@ -538,6 +544,31 @@ pub fn synthesize(timings: &[i64], sample_rate: u32, amplitude: i8) -> Vec<u8> {
         }
     }
     out
+}
+
+/// Render a transmission — a frame, repeated, with silence between the
+/// repetitions — as a baseband cs8 buffer ready for the radio.
+///
+/// Shared by the CLI and the daemon so that what the research tool proved on
+/// air and what the daemon sends are the same waveform.
+pub fn render_transmission(
+    timings: &[i64],
+    repeat: u32,
+    gap_us: u32,
+    sample_rate: u32,
+    amplitude: i8,
+) -> Vec<u8> {
+    let frame = synthesize(timings, sample_rate, amplitude);
+    let gap = synthesize(&[-i64::from(gap_us)], sample_rate, amplitude);
+
+    let mut samples = Vec::with_capacity((frame.len() + gap.len()) * (repeat as usize + 1));
+    for iteration in 0..=repeat {
+        samples.extend_from_slice(&frame);
+        if iteration < repeat {
+            samples.extend_from_slice(&gap);
+        }
+    }
+    samples
 }
 
 /// Total on-air duration of a timing array.
