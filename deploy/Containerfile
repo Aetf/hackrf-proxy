@@ -1,0 +1,22 @@
+# Build context is the repository root:
+#   podman build -f deploy/Containerfile -t hackrf-proxyd .
+#
+# The driver is pure Rust on nusb, so the result is a static musl binary with no
+# libusb, no SoapySDR and no shared libraries to keep in sync with the host.
+
+FROM docker.io/library/rust:1.89-alpine AS builder
+RUN apk add --no-cache musl-dev
+WORKDIR /build
+COPY proxyd/Cargo.toml proxyd/Cargo.lock ./
+COPY proxyd/src ./src
+RUN cargo build --release --locked && strip target/release/hrf
+
+FROM docker.io/library/alpine:3.21
+# Runs as root on purpose. Under rootless podman the container's root maps to
+# the invoking user on the host, which is who the udev rule grants access to;
+# any other user inside the container maps into the subuid range and cannot open
+# the USB node at all.
+COPY --from=builder /build/target/release/hrf /usr/local/bin/hrf
+WORKDIR /captures
+ENTRYPOINT ["hrf"]
+CMD ["--help"]

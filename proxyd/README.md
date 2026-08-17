@@ -21,15 +21,48 @@ rest on can be tested against synthetic signals: `cargo test`.
     cargo build --release      # binary at target/release/hrf
     cargo test                 # 12 tests, no hardware needed
 
+Or build the container, which is how it is meant to be run — see below.
+
+## Container
+
+Preferred way to run: the image is a static musl binary on Alpine, about 11 MB,
+with no libusb or SoapySDR on either side of the boundary. This is also the
+shape the M2 daemon will be deployed in.
+
+    podman build -f deploy/Containerfile -t hackrf-proxyd .
+    deploy/hrf-podman.sh info
+    deploy/hrf-podman.sh capture --seconds 5 --out flame_up.cs8
+    deploy/hrf-podman.sh demod --in flame_up.cs8 --out flame_up.json
+
+Captures are written to `./captures` on the host (override with
+`HRF_CAPTURES`). Two things about the USB passthrough are worth knowing:
+
+- **The container must run as root.** Under rootless podman its root maps to the
+  invoking user on the host, which is the identity the udev rule grants access
+  to. Any other user inside the container maps into the subuid range
+  (`aetf:100000:65536` here) and cannot open the node at all.
+- **`/dev/bus/usb` is bind-mounted as a directory** rather than passed as a
+  single `--device`. The HackRF changes its device number whenever it
+  re-enumerates — on re-plug, and after a device reset — and a stale `--device`
+  path fails in a way that looks like missing hardware.
+
 ## One-time device access
 
-The rule install needs root; the tool itself does not.
+Required for both the container and the native binary; the rule install needs
+root, the tool itself does not.
 
-    sudo cp ../deploy/53-hackrf.rules /etc/udev/rules.d/
+    sudo cp deploy/53-hackrf.rules /etc/udev/rules.d/
     sudo udevadm control --reload-rules && sudo udevadm trigger
 
-Make sure your user is in the group named in the rule (`plugdev`), then re-plug
-the HackRF. `hrf info` should then print a board id and firmware version.
+Then unplug and re-plug the HackRF. Without this the node is `root:root 0664`,
+so it is read-only for everyone else and the radio cannot be opened. The rule
+uses the `wheel` group because this host has no `plugdev`; change it to any
+group you belong to. `TAG+="uaccess"` alone is not enough, as it only covers
+local seat logins, not SSH sessions.
+
+`hrf info` should then print a board id and firmware version. If it instead
+reports that the HackRF is present but could not be opened, and names a node
+under `/dev/bus/usb`, the rule has not taken effect yet.
 
 ## M1 workflow
 

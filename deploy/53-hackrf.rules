@@ -1,9 +1,15 @@
-# HackRF One / Jawbreaker / rad1o — grant access to the `plugdev` group
-# (or change GROUP to one your user is in). Install as root:
+# HackRF One / Jawbreaker / rad1o — grant read/write access to the device node.
+#
+# GROUP is `wheel` because this host has no `plugdev` group and the operator is
+# already in `wheel`. Change it to any group you are a member of; `uaccess` only
+# covers local seat logins, so it does not help over SSH.
+#
+# Install as root:
 #   cp deploy/53-hackrf.rules /etc/udev/rules.d/53-hackrf.rules
 #   udevadm control --reload-rules && udevadm trigger
-ATTR{idVendor}=="1d50", ATTR{idProduct}=="6089", SYMLINK+="hackrf-one-%k", MODE="660", GROUP="plugdev", TAG+="uaccess"
-ATTR{idVendor}=="1d50", ATTR{idProduct}=="cc15", SYMLINK+="hackrf-one-%k", MODE="660", GROUP="plugdev", TAG+="uaccess"
-ATTR{idVendor}=="1d50", ATTR{idProduct}=="6084", SYMLINK+="hackrf-jawbreaker-%k", MODE="660", GROUP="plugdev", TAG+="uaccess"
+# then unplug and re-plug the HackRF.
+ATTR{idVendor}=="1d50", ATTR{idProduct}=="6089", SYMLINK+="hackrf-one-%k", MODE="660", GROUP="wheel", TAG+="uaccess"
+ATTR{idVendor}=="1d50", ATTR{idProduct}=="cc15", SYMLINK+="hackrf-one-%k", MODE="660", GROUP="wheel", TAG+="uaccess"
+ATTR{idVendor}=="1d50", ATTR{idProduct}=="6084", SYMLINK+="hackrf-jawbreaker-%k", MODE="660", GROUP="wheel", TAG+="uaccess"
 # DFU bootloader mode
-ATTR{idVendor}=="1fc9", ATTR{idProduct}=="000c", SYMLINK+="hackrf-dfu-%k", MODE="660", GROUP="plugdev", TAG+="uaccess"
+ATTR{idVendor}=="1fc9", ATTR{idProduct}=="000c", SYMLINK+="hackrf-dfu-%k", MODE="660", GROUP="wheel", TAG+="uaccess"

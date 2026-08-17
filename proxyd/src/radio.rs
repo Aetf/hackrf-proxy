@@ -18,10 +18,30 @@ const TRANSFER_SIZE: usize = 32_768;
 /// when a stream is dropped.
 const IN_FLIGHT_TRANSFERS: usize = 3;
 
+/// Open the first HackRF, distinguishing "absent" from "present but not
+/// permitted".
+///
+/// The driver's `open_first` discards the underlying error and reports the
+/// device as missing, so a permission problem — the common case in a container
+/// or before the udev rule is installed — is indistinguishable from an unplugged
+/// radio. Enumeration only reads sysfs and needs no permissions, so it can tell
+/// the two apart and name the node that needs fixing.
 pub fn open() -> Result<Arc<HackRf>> {
-    let radio = HackRf::open_first()
-        .context("no HackRF found — check it is plugged in and udev rules are installed")?;
-    Ok(Arc::new(radio))
+    match HackRf::open_first() {
+        Ok(radio) => Ok(Arc::new(radio)),
+        Err(err) => {
+            let present = HackRf::scan().unwrap_or_default();
+            let Some((bus, address)) = present.first() else {
+                return Err(anyhow::Error::new(err)
+                    .context("no HackRF found — check that it is plugged in"));
+            };
+            Err(anyhow::Error::new(err).context(format!(
+                "HackRF is present at /dev/bus/usb/{bus:03}/{address:03} but could not be opened; \
+                 the node needs read/write access (install deploy/53-hackrf.rules and re-plug), \
+                 and in a container it must be passed through and the process must run as root"
+            )))
+        }
+    }
 }
 
 /// Reject gains the hardware cannot represent.
