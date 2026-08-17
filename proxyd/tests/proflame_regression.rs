@@ -164,7 +164,7 @@ fn thermostat_mode_frames_decode_and_carry_a_new_command_byte() {
 #[test]
 fn the_sweeps_confirm_the_blower_light_and_flame_fields() {
     let frames = recorded_frames("frames/manual_sweeps.frames.jsonl");
-    assert_eq!(frames.len(), 266);
+    assert_eq!(frames.len(), 314);
 
     let states: Vec<proflame::State> = frames
         .iter()
@@ -172,12 +172,12 @@ fn the_sweeps_confirm_the_blower_light_and_flame_fields() {
         .filter_map(|d| Some(d.frame()?.state()))
         .collect();
 
-    // 236 of 266. The shortfall is fragmentary bursts — the edge counts run
+    // 268 of 314. The shortfall is fragmentary bursts — the edge counts run
     // down to 15 where a whole frame is 131 to 143 — so the signal dropped
-    // mid-frame rather than being too weak, since all but eleven frames
-    // arrived saturated. It costs nothing: five identical frames carry each
-    // state, and every step below survived.
-    assert_eq!(states.len(), 236, "fragmentary bursts are expected over a 73-minute session");
+    // mid-frame rather than being too weak, since nearly every frame arrived
+    // saturated. It costs nothing: five identical frames carry each state,
+    // and every step below survived.
+    assert_eq!(states.len(), 268, "fragmentary bursts are expected over an 81-minute session");
 
     let mut timeline: Vec<proflame::State> = Vec::new();
     for state in states {
@@ -186,20 +186,24 @@ fn the_sweeps_confirm_the_blower_light_and_flame_fields() {
         }
     }
 
-    // Each sweep moves one field and nothing else. A consecutive pair
-    // differing in more than one field would mean either a coupled pair of
-    // functions or a wrong layout — and across a 73-minute session there is
-    // exactly one, the deliberate switch out of thermostat mode, which also
-    // reset the blower and flame the thermostat had been driving.
+    // Within manual mode, every step of every sweep moves exactly one field.
+    // That is the claim being tested, and it is the one that would break if a
+    // field boundary were wrong.
     //
-    // The power-off at the end is *not* among them: it moved only `power`,
-    // because the sweeps had already left everything else at zero.
-    let multi: Vec<_> = timeline
+    // Restricted to manual mode on purpose. Crossing into or out of thermostat
+    // mode legitimately moves several fields at once, because the handset
+    // restores the flame level it had been driving and switches the appliance
+    // on or off by itself — behaviour the mode transitions in this session
+    // show plainly, and which manual-mode presses never exhibit.
+    let manual_steps: Vec<_> = timeline
         .windows(2)
+        .filter(|pair| pair.iter().all(|s| !s.thermostat && s.power))
         .map(|pair| pair[1].differences(&pair[0]))
-        .filter(|changed| changed.len() > 1)
         .collect();
-    assert_eq!(multi, vec![vec!["thermostat", "fan", "flame"]], "{multi:?}");
+    assert!(!manual_steps.is_empty());
+    for changed in &manual_steps {
+        assert_eq!(changed.len(), 1, "a manual press should move one field: {changed:?}");
+    }
 
     let manual: Vec<_> = timeline.iter().filter(|s| !s.thermostat && s.power).collect();
     let seen =
@@ -210,7 +214,21 @@ fn the_sweeps_confirm_the_blower_light_and_flame_fields() {
     assert!(seen(|s| s.flame).is_superset(&BTreeSet::from([0, 1, 2, 3, 4, 5, 6])));
 
     // Nothing in this session should have touched the fields it did not test.
-    assert!(timeline.iter().all(|s| !s.aux && !s.front && !s.pilot && s.reserved == 0));
+    assert!(timeline.iter().all(|s| !s.aux && !s.front && !s.pilot));
+
+    // The handset offers three thermostat choices — smart, standard, off —
+    // but only ever puts one bit on the air, and the two spare bits of `cmd1`
+    // stay zero through all of it. The difference between "modulates the
+    // flame" and "only switches on and off" lives in the handset, not in the
+    // protocol; see docs/PROTOCOL.md.
+    assert!(timeline.iter().all(|s| s.reserved == 0), "the spare bits stayed spare");
+
+    // And in thermostat mode the handset drives `power` itself, not just the
+    // flame: this is the state where it had decided the room was warm enough.
+    assert!(
+        timeline.iter().any(|s| s.thermostat && !s.power),
+        "the thermostat switched the appliance off on its own"
+    );
 }
 
 /// Re-encoding a captured frame and decoding it again must reproduce the
