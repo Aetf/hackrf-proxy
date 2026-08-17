@@ -254,11 +254,13 @@ hackrf-proxy/
 
 ## 5. Milestones
 
-1. **M1 — spike: capture, re-verify protocol, TX**: driver crate bake-off
-   (seify-hackrfone vs rs-hackrf); capture the physical remote fresh
-   (previous protocol notes are untrusted) and re-derive framing/checksum;
-   OOK burst TX replay of a verified capture → does the fireplace respond?
-   (Go/no-go for everything.)
+1. ~~**M1 — spike: capture, re-verify protocol, TX**~~ **done 2026-08-16.**
+   Driver is seify-hackrfone; `proxyd/` carries the `hrf` CLI. The remote was
+   captured fresh and the protocol derived from scratch (docs/PROTOCOL.md),
+   which independently reproduced the inherited checksum model and the remote
+   id. Replaying a captured frame ignited the fireplace, so RX and TX are both
+   proven. Outstanding from this phase: the off command has not been captured,
+   so RF can currently start the appliance but not stop it.
 2. **M2 — daemon proper**: WS API, half-duplex arbiter, RX → timing frames,
    quadlet deployment.
 3. **M3 — `hackrf_proxy` integration**: transmitter entity + availability;
