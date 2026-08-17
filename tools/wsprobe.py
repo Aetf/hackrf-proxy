@@ -36,20 +36,27 @@ class WebSocket:
             f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\n"
             f"Sec-WebSocket-Version: 13\r\n\r\n".encode()
         )
-        header = self._until(b"\r\n\r\n")
+        self.buffer = b""
+        header, rest = self._until(b"\r\n\r\n")
         status = header.split(b"\r\n")[0].decode(errors="replace")
         if b"101" not in header.split(b"\r\n")[0]:
             raise SystemExit(f"handshake refused: {status}")
-        self.buffer = b""
+        # Anything the server sent immediately after the handshake arrives in
+        # the same read. Dropping it would silently desynchronise the frame
+        # stream and leave every later read waiting for bytes that already
+        # went past.
+        self.buffer = rest
 
     def _until(self, marker):
+        """Read up to and including `marker`, returning it and the remainder."""
         data = b""
         while marker not in data:
             chunk = self.sock.recv(4096)
             if not chunk:
                 raise SystemExit("connection closed during handshake")
             data += chunk
-        return data
+        head, _, rest = data.partition(marker)
+        return head + marker, rest
 
     def _read(self, count):
         while len(self.buffer) < count:
@@ -102,12 +109,15 @@ class WebSocket:
 
 
 def show(direction, text):
+    # Flushed every time: piped to a file, Python block-buffers stdout, and a
+    # monitor whose output only appears when it exits is no monitor at all.
+    # This cost us a set of captured frames once.
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
-        print(f"{direction} {text}")
+        print(f"{direction} {text}", flush=True)
         return None
-    print(f"{direction} {json.dumps(parsed, indent=2, sort_keys=True)}")
+    print(f"{direction} {json.dumps(parsed, indent=2, sort_keys=True)}", flush=True)
     return parsed
 
 

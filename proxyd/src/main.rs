@@ -177,6 +177,14 @@ enum Command {
         /// Ignore received bursts with fewer edges than this.
         #[arg(long, default_value_t = 8)]
         min_edges: usize,
+        /// Append every received frame to this file, one JSON object per line,
+        /// flushed as it arrives. Read it back with `hrf decode --in`.
+        ///
+        /// Mapping a remote's unknown fields means pressing buttons and
+        /// comparing frames, often across days; this keeps that from depending
+        /// on a client staying connected.
+        #[arg(long, value_name = "FILE")]
+        record: Option<PathBuf>,
     },
 
     /// Transmit OOK from a Flipper-RAW timings JSON array.
@@ -308,6 +316,7 @@ fn main() -> Result<()> {
             txvga,
             gap_us,
             min_edges,
+            record,
         } => {
             let settings =
                 radio::DeviceSettings { sample_rate: rate, lna_db: lna, vga_db: vga, rx_amp };
@@ -318,6 +327,7 @@ fn main() -> Result<()> {
             config.txvga_db = txvga;
             config.detector.gap_us = gap_us;
             config.detector.min_edges = min_edges;
+            config.record = record;
 
             serve(&listen, settings, config)
         }
@@ -558,18 +568,44 @@ enum TimingsFile {
     One(Vec<i64>),
 }
 
+/// One line of `serve --record`: an rx_frame event as it went out on the wire.
+#[derive(serde::Deserialize)]
+struct RecordedFrame {
+    timings: Vec<i64>,
+}
+
+/// Read a file of bursts, whichever of the three shapes it is in.
+///
+/// The daemon's recording is JSON Lines rather than one array, so that it can
+/// be appended to for as long as the radio runs and still be readable while it
+/// does. Detecting it by the leading brace keeps `decode` a single command for
+/// everything the project produces.
+fn read_bursts(path: &Path) -> Result<Vec<Vec<i64>>> {
+    let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+    if text.trim_start().starts_with('{') {
+        return text
+            .lines()
+            .filter(|line| !line.trim().is_empty())
+            .map(|line| {
+                serde_json::from_str::<RecordedFrame>(line)
+                    .map(|frame| frame.timings)
+                    .with_context(|| format!("{}: not a recorded frame: {line}", path.display()))
+            })
+            .collect();
+    }
+    match serde_json::from_str(&text)
+        .with_context(|| format!("{}: not a timings JSON file", path.display()))?
+    {
+        TimingsFile::Many(bursts) => Ok(bursts),
+        TimingsFile::One(burst) => Ok(vec![burst]),
+    }
+}
+
 fn decode(paths: &[PathBuf]) -> Result<()> {
     let mut all_good = true;
     for path in paths {
         println!("=== {}", path.display());
-        let json =
-            std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-        let bursts = match serde_json::from_str(&json)
-            .with_context(|| format!("{}: not a timings JSON file", path.display()))?
-        {
-            TimingsFile::Many(bursts) => bursts,
-            TimingsFile::One(burst) => vec![burst],
-        };
+        let bursts = read_bursts(path)?;
         all_good &= report(&bursts);
         println!();
     }

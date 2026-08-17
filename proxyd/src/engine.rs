@@ -74,7 +74,7 @@ pub enum Command {
     },
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Config {
     pub sample_rate: u32,
     pub rx_frequency: u64,
@@ -83,6 +83,12 @@ pub struct Config {
     /// Baseband amplitude for a mark. Full scale would clip the DAC.
     pub tx_amplitude: i8,
     pub detector: ook::DetectorConfig,
+    /// Append every received frame here, one JSON object per line.
+    ///
+    /// Mapping a remote's unknown fields means pressing buttons and comparing
+    /// frames, often over days. Making that depend on a client staying
+    /// connected is how captures get lost, so the daemon can keep its own.
+    pub record: Option<std::path::PathBuf>,
 }
 
 impl Config {
@@ -94,6 +100,48 @@ impl Config {
             txvga_db: 30,
             tx_amplitude: 100,
             detector: ook::DetectorConfig::new(sample_rate),
+            record: None,
+        }
+    }
+}
+
+/// Appends received frames to a file as JSON Lines.
+///
+/// Flushed after every frame: a recording that only reaches disk when the
+/// process exits cleanly is worthless for the thing it exists for, which is
+/// being able to look at what was heard while the radio keeps running.
+struct Recorder {
+    path: std::path::PathBuf,
+    file: Option<std::io::BufWriter<std::fs::File>>,
+}
+
+impl Recorder {
+    fn new(path: std::path::PathBuf) -> Self {
+        Self { path, file: None }
+    }
+
+    fn write(&mut self, frame: &wire::RxFrame) {
+        if self.file.is_none() {
+            match std::fs::OpenOptions::new().create(true).append(true).open(&self.path) {
+                Ok(file) => self.file = Some(std::io::BufWriter::new(file)),
+                Err(error) => {
+                    log::error!("cannot record to {}: {error}", self.path.display());
+                    return;
+                }
+            }
+        }
+        let Some(file) = self.file.as_mut() else { return };
+
+        use std::io::Write as _;
+        let outcome = serde_json::to_writer(&mut *file, frame)
+            .map_err(std::io::Error::from)
+            .and_then(|()| writeln!(file))
+            .and_then(|()| file.flush());
+        if let Err(error) = outcome {
+            log::error!("cannot record to {}: {error}", self.path.display());
+            // Drop the handle so a later frame retries rather than failing
+            // silently for the rest of the run.
+            self.file = None;
         }
     }
 }
@@ -117,8 +165,10 @@ pub fn run<T: Transceiver>(
     mut commands: mpsc::Receiver<Command>,
     events: broadcast::Sender<wire::Message>,
 ) {
+    let mut recorder = config.record.clone().map(Recorder::new);
+    let detector_config = config.detector;
     let mut state = State::new(config, &mut device);
-    let mut detector = ook::Detector::new(config.detector);
+    let mut detector = ook::Detector::new(detector_config);
     // Reused across every transfer, so a receiving daemon does no allocation
     // in its steady state.
     let mut buffer = Vec::new();
@@ -153,7 +203,7 @@ pub fn run<T: Transceiver>(
             continue;
         }
         if state.receiving() {
-            state.pump(&mut device, &mut detector, &mut buffer, &events);
+            state.pump(&mut device, &mut detector, &mut buffer, recorder.as_mut(), &events);
         }
     }
 
@@ -366,6 +416,7 @@ impl State {
         device: &mut T,
         detector: &mut ook::Detector,
         buffer: &mut Vec<u8>,
+        mut recorder: Option<&mut Recorder>,
         events: &broadcast::Sender<wire::Message>,
     ) {
         if !self.rx_running {
@@ -405,13 +456,16 @@ impl State {
                 burst.peak,
                 detector.threshold()
             );
-            let _ =
-                events.send(wire::Message::event(wire::MessagePayload::RxFrame(wire::RxFrame {
-                    frequency: self.rx_frequency,
-                    timings: burst.timings,
-                    rssi: burst.peak,
-                    timestamp_ms: now_ms(),
-                })));
+            let frame = wire::RxFrame {
+                frequency: self.rx_frequency,
+                timings: burst.timings,
+                rssi: burst.peak,
+                timestamp_ms: now_ms(),
+            };
+            if let Some(recorder) = recorder.as_deref_mut() {
+                recorder.write(&frame);
+            }
+            let _ = events.send(wire::Message::event(wire::MessagePayload::RxFrame(frame)));
         }
     }
 
@@ -762,6 +816,43 @@ mod tests {
         assert_eq!(frame.frequency, 315_000_000);
         assert_eq!(frame.rssi, 100);
         assert_eq!(harness.status().counters.rx_frames, 1);
+    }
+
+    #[test]
+    fn recorded_frames_reach_disk_as_they_arrive() {
+        // The point of recording is to be readable while the radio is still
+        // running, so a frame must be on disk before the daemon stops.
+        let directory = std::env::temp_dir().join(format!("hrf-record-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("frames.jsonl");
+
+        let radio = FakeRadio::default();
+        {
+            let mut shared = radio.shared.lock().unwrap();
+            shared.rx_data.push(vec![0u8; 20_000 * ook::BYTES_PER_SAMPLE]);
+            shared.rx_data.push(ook::synthesize(&[500, -500, 500, -500, 500], 2_000_000, 100));
+            shared.rx_data.push(ook::synthesize(&[-20_000], 2_000_000, 100));
+        }
+        let mut config = config();
+        config.record = Some(path.clone());
+        let mut harness = Harness::start(config, radio);
+
+        harness
+            .wait_for(|message| match &message.payload {
+                wire::MessagePayload::RxFrame(_) => Some(()),
+                _ => None,
+            })
+            .expect("a frame should be received");
+
+        let recorded = std::fs::read_to_string(&path).expect("the file should exist already");
+        let first = recorded.lines().next().expect("a line should be flushed already");
+        let frame: serde_json::Value = serde_json::from_str(first).unwrap();
+
+        assert_eq!(frame["timings"], serde_json::json!([500, -500, 500, -500, 500]));
+        assert_eq!(frame["frequency"], 315_000_000);
+        assert_eq!(frame["rssi"], 100);
+
+        let _ = std::fs::remove_dir_all(&directory);
     }
 
     #[test]

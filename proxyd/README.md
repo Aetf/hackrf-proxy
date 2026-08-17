@@ -45,6 +45,19 @@ Poke it with `tools/wsprobe.py` (no dependencies, for boxes without websocat):
     tools/wsprobe.py --host homelab --port 8765            # status
     tools/wsprobe.py --host homelab --listen               # watch rx_frame events
 
+### Recording what it hears
+
+    hrf serve --record frames.jsonl
+    hrf decode --in frames.jsonl
+
+One JSON object per line, flushed as each frame arrives, so the file is
+readable while the radio keeps running and `decode` reads it directly.
+
+Use this rather than a listening client for any protocol work. Mapping a
+remote's unknown fields means pressing buttons and comparing frames, often
+across days, and making that depend on a client staying connected is how
+captures get lost — which is exactly how a set of them was lost here.
+
 ### Protocol
 
 JSON over WebSocket. Every message carries `v`, from day one, so a client that
