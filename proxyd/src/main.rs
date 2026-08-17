@@ -28,6 +28,33 @@ enum Command {
     /// Open the first HackRF and print board id and firmware version.
     Info,
 
+    /// Watch received power on several frequencies at once, as a live meter.
+    ///
+    /// Hold a remote button down while this runs: the frequency it uses will
+    /// stand out. Use it when a capture comes back as pure noise, since that
+    /// looks identical whether the frequency is wrong, the remote is out of
+    /// range, or the button was pressed outside the window.
+    Scan {
+        /// Comma-separated frequencies in Hz. Defaults to the FCC and CE
+        /// Proflame bands plus their neighbours.
+        #[arg(long, default_value = "315000000,318000000,390000000,433920000")]
+        freqs: String,
+        #[arg(long, default_value_t = 2_000_000)]
+        rate: u32,
+        #[arg(long, default_value_t = 40)]
+        lna: u16,
+        #[arg(long, default_value_t = 40)]
+        vga: u16,
+        /// Enable the front-end RX amplifier (+14 dB). Worth it when hunting.
+        #[arg(long)]
+        amp: bool,
+        /// Seconds to listen on each frequency before moving on.
+        #[arg(long, default_value_t = 0.3)]
+        dwell: f64,
+        #[arg(long, default_value_t = 40)]
+        passes: u32,
+    },
+
     /// Receive raw IQ to a cs8 file.
     Capture {
         #[arg(long, default_value_t = 315_000_000)]
@@ -110,6 +137,22 @@ fn main() -> Result<()> {
 
     match Cli::parse().command {
         Command::Info => info(),
+        Command::Scan { freqs, rate, lna, vga, amp, dwell, passes } => {
+            let frequencies = freqs
+                .split(',')
+                .map(|f| f.trim().parse::<u64>())
+                .collect::<Result<Vec<_>, _>>()
+                .context("--freqs must be comma-separated frequencies in Hz")?;
+            radio::scan(&radio::ScanParams {
+                frequencies,
+                sample_rate: rate,
+                lna_db: lna,
+                vga_db: vga,
+                amp_enable: amp,
+                dwell_seconds: dwell,
+                passes,
+            })
+        }
         Command::Capture { freq, rate, lna, vga, amp, seconds, out } => radio::capture(
             &radio::CaptureParams {
                 frequency_hz: freq,

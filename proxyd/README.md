@@ -85,6 +85,10 @@ under `/dev/bus/usb`, the rule has not taken effect yet.
     # 1. Sanity check the device.
     hrf info
 
+    # 1b. If a capture comes back as pure noise, scan instead of guessing.
+    #     Hold a remote button down while this runs; the band it uses stands out.
+    hrf scan --amp
+
     # 2. Capture the remote. Start this, then press one button, once, cleanly.
     #    Peak level is reported once a second, so a bad gain setting is obvious
     #    immediately rather than at demodulation time.
@@ -131,6 +135,22 @@ For reference, three seconds of ambient 315 MHz with nothing transmitting, at
 the default `--lna 40 --vga 40`, measured a noise floor of 24 and a 99.9th
 percentile of 110, and `demod` correctly found no bursts. A remote keypress
 should stand well clear of that.
+
+### Site noise matters, and 315 MHz is the bad case here
+
+An idle `scan` from the garage server, same gains throughout:
+
+| band | peak | 99.9% |
+|------|------|-------|
+| 315.000 MHz | 164–194 | 110 |
+| 318.000 MHz | 138–237 | 93  |
+| 390.000 MHz | ~102    | 40  |
+| 433.920 MHz | ~31     | 20  |
+
+The noise floor at 315 MHz is over five times that at 433.92 MHz. That is the
+local environment, not a gain artefact — switching supplies and USB in a server
+put broadband hash right where this remote lives. A weak signal has to clear
+that, so where the radio sits matters as much as whether it can hear at all.
 
 ## Caveats worth knowing before decoding
 

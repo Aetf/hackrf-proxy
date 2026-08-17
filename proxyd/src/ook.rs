@@ -58,15 +58,63 @@ pub fn peak_magnitude(iq: &[u8]) -> u16 {
 /// recording. When it does not hold, the noise floor and signal level collapse
 /// onto each other, which the caller can detect by comparing the two.
 pub fn levels(mag: &[u16], frac: f64) -> Levels {
-    let mut hist = [0usize; MAG_LEVELS];
+    let mut hist = AmplitudeHistogram::new();
     for &m in mag {
-        hist[usize::from(m).min(MAG_LEVELS - 1)] += 1;
+        hist.add_magnitude(m);
     }
-    let noise_floor = percentile(&hist, mag.len(), 0.50);
-    let signal = percentile(&hist, mag.len(), 0.999);
-    let span = f64::from(signal.saturating_sub(noise_floor));
-    let threshold = noise_floor.saturating_add((span * frac).round() as u16);
-    Levels { noise_floor, signal, threshold }
+    hist.levels(frac)
+}
+
+/// Streaming amplitude statistics, so a long capture never has to be held in
+/// memory to be characterised.
+#[derive(Clone)]
+pub struct AmplitudeHistogram {
+    counts: [usize; MAG_LEVELS],
+    total: usize,
+    peak: u16,
+}
+
+impl Default for AmplitudeHistogram {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AmplitudeHistogram {
+    pub fn new() -> Self {
+        Self { counts: [0; MAG_LEVELS], total: 0, peak: 0 }
+    }
+
+    pub fn add_magnitude(&mut self, magnitude: u16) {
+        self.counts[usize::from(magnitude).min(MAG_LEVELS - 1)] += 1;
+        self.total += 1;
+        self.peak = self.peak.max(magnitude);
+    }
+
+    /// Accumulate straight from an interleaved cs8 buffer.
+    pub fn add_iq(&mut self, iq: &[u8]) {
+        for sample in iq.chunks_exact(BYTES_PER_SAMPLE) {
+            let magnitude =
+                (i32::from(sample[0] as i8).abs() + i32::from(sample[1] as i8).abs()) as u16;
+            self.add_magnitude(magnitude);
+        }
+    }
+
+    pub fn peak(&self) -> u16 {
+        self.peak
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.total == 0
+    }
+
+    pub fn levels(&self, frac: f64) -> Levels {
+        let noise_floor = percentile(&self.counts, self.total, 0.50);
+        let signal = percentile(&self.counts, self.total, 0.999);
+        let span = f64::from(signal.saturating_sub(noise_floor));
+        let threshold = noise_floor.saturating_add((span * frac).round() as u16);
+        Levels { noise_floor, signal, threshold }
+    }
 }
 
 fn percentile(hist: &[usize; MAG_LEVELS], total: usize, p: f64) -> u16 {

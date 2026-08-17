@@ -164,6 +164,79 @@ pub fn capture(params: &CaptureParams, out: &Path) -> Result<()> {
     Ok(())
 }
 
+pub struct ScanParams {
+    pub frequencies: Vec<u64>,
+    pub sample_rate: u32,
+    pub lna_db: u16,
+    pub vga_db: u16,
+    pub amp_enable: bool,
+    pub dwell_seconds: f64,
+    pub passes: u32,
+}
+
+/// Watch received power on several frequencies in turn, as a live meter.
+///
+/// A blind capture cannot distinguish "wrong frequency" from "out of range"
+/// from "button missed the window", because all three produce a file of noise.
+/// Sweeping while the button is held makes the answer visible as it happens.
+pub fn scan(params: &ScanParams) -> Result<()> {
+    validate_rx_gains(params.lna_db, params.vga_db)?;
+    validate_sample_rate(params.sample_rate)?;
+    ensure!(!params.frequencies.is_empty(), "no frequencies to scan");
+
+    let radio = open()?;
+    radio.start_rx(&Config {
+        lna_db: params.lna_db,
+        vga_db: params.vga_db,
+        txvga_db: 0,
+        amp_enable: params.amp_enable,
+        antenna_enable: false,
+        frequency_hz: params.frequencies[0],
+        sample_rate_hz: params.sample_rate,
+        sample_rate_div: 1,
+    })?;
+    let mut stream = radio.start_rx_stream(TRANSFER_SIZE)?;
+
+    let dwell_bytes =
+        (params.dwell_seconds * f64::from(params.sample_rate)) as usize * ook::BYTES_PER_SAMPLE;
+
+    print!("pass ");
+    for frequency in &params.frequencies {
+        print!("{:>18}", format!("{:.3} MHz", *frequency as f64 / 1e6));
+    }
+    println!("\n     {}", "  peak (99.9%)   ".repeat(params.frequencies.len()));
+
+    for pass in 1..=params.passes {
+        print!("{pass:>4} ");
+        for frequency in &params.frequencies {
+            radio.set_freq(*frequency)?;
+            // Discard one transfer so the retune transient is not measured.
+            stream.read_sync(TRANSFER_SIZE)?;
+
+            let mut histogram = ook::AmplitudeHistogram::new();
+            let mut collected = 0usize;
+            while collected < dwell_bytes {
+                let chunk = stream.read_sync((dwell_bytes - collected).min(TRANSFER_SIZE))?;
+                histogram.add_iq(chunk);
+                collected += chunk.len();
+            }
+            let levels = histogram.levels(0.5);
+            print!("{:>18}", format!("{:>3} ({:>3})", histogram.peak(), levels.signal));
+        }
+        println!();
+        use std::io::Write as _;
+        std::io::stdout().flush().ok();
+    }
+
+    drop(stream);
+    println!(
+        "\nBaseline noise on an idle band sits near peak 110. A transmitting remote a few\n\
+         centimetres from the antenna should saturate towards 250; anything that does not\n\
+         clearly rise above the other frequencies is not the one being used."
+    );
+    Ok(())
+}
+
 pub struct TransmitParams {
     pub frequency_hz: u64,
     pub sample_rate: u32,
