@@ -34,6 +34,8 @@ What exists:
 - `tests/` — `cmd.csv` (220 inherited packets, 5 remotes),
   `frames/*.timings.json` (bench captures) and `frames/*.frames.jsonl`
   (recorded by the daemon).
+- `integrations/` — the Home Assistant side. `hackrf_proxy` (the transmitter)
+  exists; `proflame` (the consumer) does not yet.
 - `deploy/` — Containerfile, quadlet unit, podman wrapper, udev rule.
 
 What does not exist yet: both Home Assistant integrations (M3 and M4's consumer
@@ -81,12 +83,11 @@ udev and rootless-podman traps that cost real time here.
 
 ## Next
 
-1. **M3: the `hackrf_proxy` HA transmitter integration.** A thin pure-Python
-   WebSocket client, one `RadioFrequencyTransmitterEntity`, availability from
-   the connection. The daemon's protocol is documented in `proxyd/README.md`.
-2. **M4's consumer half: the `proflame` integration.** The protocol is already
-   ported and tested; what is missing is the HA side — config flow with a
-   transmitter picker, and the entities.
+1. **M4's consumer half: the `proflame` integration.** The protocol is solved
+   and every command field is mapped; what is missing is the Home Assistant
+   side — a config flow with a transmitter picker, and the entities.
+2. Confirm the `hackrf_proxy` transmitter on air, which needs a Home Assistant
+   restart to load it and one real transmission to prove the path.
 3. ~~Map the remaining command fields.~~ Done (2026-08-17): six confirmed by
    controlled captures, two unreachable on this appliance. See
    `docs/MAPPING.md`.
