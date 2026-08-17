@@ -1,0 +1,54 @@
+# Quadlet unit for the daemon. Install with:
+#
+#   cp deploy/hackrf-proxyd.container ~/.config/containers/systemd/
+#   systemctl --user daemon-reload
+#   systemctl --user start hackrf-proxyd
+#
+# This is a rootless user unit, so `loginctl enable-linger $USER` is what makes
+# it survive logout and come up at boot.
+#
+# Device access needs deploy/60-hackrf-access.rules installed first: the distro
+# hackrf package grants access with TAG+="uaccess" alone, which is an ACL logind
+# hands to a *local seat* session and therefore grants nothing here.
+
+[Unit]
+Description=Network-attached HackRF transceiver proxy for Home Assistant
+Documentation=https://github.com/aetf/hackrf-proxy
+Wants=network-online.target
+After=network-online.target
+
+[Container]
+Image=localhost/hackrf-proxyd:latest
+Exec=serve --listen 0.0.0.0:8765 --rx-freq 315M
+
+# The container runs as root deliberately. Under rootless podman its root maps
+# to the invoking user on the host, which is the identity the udev rule grants
+# access to; any other user inside maps into the subuid range and cannot open
+# the USB node at all.
+User=root
+
+# The whole USB directory rather than a single device node: the HackRF changes
+# its device number whenever it re-enumerates — on re-plug, and after a device
+# reset — and a stale node path fails in a way that looks like missing hardware.
+Volume=/dev/bus/usb:/dev/bus/usb
+
+# The udev rule grants access through the `wheel` group, but a rootless
+# container maps only the user's uid and primary gid, so supplementary group
+# membership is dropped and the node stays unreadable even though the same user
+# can open it on the host. This keeps the host's supplementary groups for the
+# kernel's permission check. Inside the container they appear as 65534, having
+# no mapping in the namespace; that is expected and access still works.
+PodmanArgs=--group-add keep-groups
+
+PublishPort=8765:8765
+Environment=RUST_LOG=info
+
+[Service]
+# The daemon does not exit when the radio is missing or fails — it serves in a
+# faulted state and keeps retrying — so a restart here is for the daemon itself
+# falling over, which should be rare and is worth backing off on.
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=default.target

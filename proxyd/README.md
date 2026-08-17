@@ -1,31 +1,105 @@
-# hackrf-proxyd (M1 spike)
+# hackrf-proxyd
 
-Standalone HackRF research CLI (`hrf`) for milestone M1. Not the daemon yet —
-it exists to prove TX/RX work and to re-derive the Proflame framing from a
-fresh capture, since the earlier protocol notes are untrusted.
+`hrf`: the daemon that makes a HackRF a network-attached radio, and the bench
+tools the protocol was solved with. `hrf serve` is the daemon; `capture`,
+`demod`, `decode`, `transmit`, `scan` and `info` are the tools.
 
 Driver: `seify-hackrfone` (pure Rust, nusb, no C dependencies). `rs-hackrf` was
 rejected: it is receive-only and cannot drive the transmit path.
 
 ## Layout
 
-The crate is a library with a thin CLI on top, so the M2 daemon links the same
-modules instead of growing out of the CLI:
+A library with a thin CLI on top. The daemon links the library rather than
+growing out of the CLI, and the layering is what keeps the project testable
+without a radio on the bench:
 
     src/lib.rs       crate root; the layering contract lives in its doc comment
-    src/ook.rs       signal processing: IQ <-> timings, bursts, histograms
+    src/ook.rs       signal processing: IQ <-> timings, bursts, histograms, streaming
     src/proflame.rs  the Proflame protocol: timings <-> frames, checksums, keys
-    src/radio.rs     device handling: gain validation, streaming capture and transmit
+    src/wire.rs      the WebSocket protocol: types and validation
+    src/engine.rs    the half-duplex arbiter, over a Transceiver trait
+    src/server.rs    the WebSocket front end
+    src/radio.rs     the only module that needs a HackRF plugged in
     src/main.rs      the hrf CLI
     tests/           regression against ../tests (inherited table + own captures)
 
-`ook.rs` and `proflame.rs` are deliberately hardware-free, so everything the
-protocol conclusions rest on can be tested without a radio. The integration
-tests freeze the M1 results in place: all 440 checksum bytes of the inherited
-`cmd.csv`, and every clean frame of our own captures, must keep decoding to
-exactly the values documented in docs/PROTOCOL.md. `tools/decode_proflame.py`
-remains as an independent reference implementation; its report and `hrf
-decode`'s agree byte for byte on the regression captures.
+Everything except `radio.rs` is tested without hardware, including the arbiter,
+which runs against a fake device. The integration tests freeze the protocol
+results in place: all 440 checksum bytes of the inherited `cmd.csv`, and every
+clean frame of our own captures, must keep decoding to exactly the values
+documented in docs/PROTOCOL.md. `tools/decode_proflame.py` remains as an
+independent reference implementation; its report and `hrf decode`'s agree byte
+for byte on the regression captures.
+
+## The daemon
+
+    hrf serve --listen 0.0.0.0:8765 --rx-freq 315M
+
+It receives continuously, publishing each burst it hears, and lets clients
+preempt with transmissions. It is **protocol-agnostic**: it moves raw OOK
+timings and knows nothing about Proflame or fireplaces, which is what makes it a
+shared radio proxy rather than one appliance's bridge.
+
+Poke it with `tools/wsprobe.py` (no dependencies, for boxes without websocat):
+
+    tools/wsprobe.py --host homelab --port 8765            # status
+    tools/wsprobe.py --host homelab --listen               # watch rx_frame events
+
+### Protocol
+
+JSON over WebSocket. Every message carries `v`, from day one, so a client that
+predates a change is told so rather than silently misreading it. Requests may
+carry an `id`, which is echoed on the reply.
+
+Requests:
+
+| type | fields |
+|------|--------|
+| `transmit` | `frequency`, `timings[]`, `repeat`, `gap_us`, `txvga_db?`, `amp?` |
+| `configure_rx` | `frequency?`, `enabled` |
+| `status` | — |
+
+Replies are `transmitted{duration_us}`, `status{...}` or `error{message}`.
+Server-pushed events are `rx_frame{frequency, timings, rssi, timestamp_ms}` and
+`device_state{state}`, where state is `receiving`, `transmitting`, `idle` or
+`faulted`.
+
+Two things a client has to get right:
+
+- **Match replies by `id`.** Events arrive at any time, and a transmission's own
+  `device_state` event overtakes its reply. Reading "the next message" is a bug
+  that will look like it works until the first transmission.
+- **`rssi` is not dBm.** It is the peak L1 magnitude of the burst on a 0–256
+  scale, uncalibrated and dependent on the configured gains. Compare bursts to
+  each other with it; do not read it as absolute power.
+
+`transmit` replies when the air time is over, not when the request is queued,
+so a client knows the transmission actually happened.
+
+### What it refuses
+
+Requests the wire layer can judge are refused without troubling the radio: an
+empty timing list, a zero timing, a frequency outside 1 MHz–6 GHz, a TX gain
+above 47 dB, and more than 30 seconds of air time in one request. That last one
+is the ceiling that matters operationally — the radio is half-duplex, so a long
+transmission is a long deafness for every other client.
+
+### Behaviour worth knowing
+
+- **A missing or failing radio does not stop the daemon.** It serves in a
+  `faulted` state, reports the reason on every request, and keeps retrying. A
+  USB re-enumeration permanently kills the old handle, so the device is dropped
+  and reopened rather than retried on a dead one.
+- **The receiver needs one window (a second by default) to learn the band**
+  before it can slice it, so nothing is detected in the first second.
+- **A slow client loses events rather than slowing the radio down.** Falling
+  behind is logged with the number dropped.
+
+## Build
+
+    cargo build --release      # binary at target/release/hrf
+    cargo test                 # unit + regression tests, no hardware needed
+    cargo fmt && cargo clippy  # style is pinned by rustfmt.toml
 
 ## Build
 
@@ -37,14 +111,23 @@ Or build the container, which is how it is meant to be run — see below.
 
 ## Container
 
-Preferred way to run: the image is a static musl binary on Alpine, about 11 MB,
-with no libusb or SoapySDR on either side of the boundary. This is also the
-shape the M2 daemon will be deployed in.
+Preferred way to run: the image is a static musl binary on Alpine, about 12 MB,
+with no libusb or SoapySDR on either side of the boundary.
 
     podman build -f deploy/Containerfile -t hackrf-proxyd .
     deploy/hrf-podman.sh info
     deploy/hrf-podman.sh capture --seconds 5 --out flame_up.cs8
     deploy/hrf-podman.sh demod --in flame_up.cs8 --out flame_up.json
+
+The daemon is deployed as a rootless quadlet unit:
+
+    cp deploy/hackrf-proxyd.container ~/.config/containers/systemd/
+    systemctl --user daemon-reload
+    systemctl --user start hackrf-proxyd
+
+`loginctl enable-linger $USER` is what makes it survive logout and start at
+boot. The unit carries the same USB caveats as the wrapper script, and the
+reasons are in its comments.
 
 Captures are written to `./captures` on the host (override with
 `HRF_CAPTURES`). Two things about the USB passthrough are worth knowing:
@@ -106,7 +189,9 @@ host config, and applied with `aconfmgr apply`.
 reports that the HackRF is present but could not be opened, and names a node
 under `/dev/bus/usb`, the rule has not taken effect yet.
 
-## M1 workflow
+## Bench workflow
+
+How the protocol was solved, and how to map a field that is still unknown.
 
     # 1. Sanity check the device.
     hrf info
@@ -132,7 +217,20 @@ under `/dev/bus/usb`, the rule has not taken effect yet.
     # 4. Replay. Keep --amp off at close range.
     hrf transmit --freq 315000000 --file captures/flame_up.json --repeat 4
 
-Step 4 is the project's go/no-go: does the fireplace react?
+Step 4 was the project's go/no-go, and the fireplace did react.
+
+To check what a *live receiver* would have made of a capture — rather than the
+more sensitive two-pass offline path — run the same file through the daemon's
+own detector:
+
+    hrf demod --in captures/flame_up.cs8 --stream --gap-us 3000
+
+A capture that decodes offline but comes up empty here is a receiver problem
+worth knowing about before it shows up as a missed keypress on the air. The
+streaming path is slightly less sensitive by nature: it cannot know the signal
+level in advance, and on the power capture it recovers all 25 bursts but decodes
+24 of them cleanly against the offline path's 25. Since a remote sends five
+identical repeats per press, losing one frame does not lose the press.
 
 ### Reading the demod output
 

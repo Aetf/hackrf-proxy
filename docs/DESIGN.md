@@ -259,26 +259,52 @@ hackrf-proxy/
    captured fresh and the protocol derived from scratch (docs/PROTOCOL.md),
    which independently reproduced the inherited checksum model and the remote
    id. Replaying a captured frame ignited the fireplace, so RX and TX are both
-   proven. Outstanding from this phase: the off command has not been captured,
-   so RF can currently start the appliance but not stop it.
-2. **M2 — daemon proper**: WS API, half-duplex arbiter, RX → timing frames,
-   quadlet deployment.
+   proven. The off command was captured on 2026-08-16, closing the one gap this
+   phase left: `cmd1` bit 0 is on/off, so RF can now both start and stop the
+   appliance by verbatim replay.
+2. ~~**M2 — daemon proper**~~ **done 2026-08-17.** `hrf serve`: WS API with a
+   versioned envelope, half-duplex arbiter on a dedicated thread, streaming RX
+   to timing frames, quadlet unit. Protocol documented in `proxyd/README.md`.
+   The arbiter is tested against a fake device, so preemption, retuning and
+   fault recovery are covered without hardware. Two decisions worth recording
+   here because they were not obvious from this document:
+   - **A dedicated OS thread owns the radio, not a tokio task.** The driver's
+     I/O is blocking and a transmission holds it for the best part of a second.
+     Arbitration then needs no locks, since it is that thread's control flow.
+   - **The streaming receiver cannot reuse the offline threshold logic.** The
+     offline path is two-pass. Live, the threshold has to be bounded below by a
+     statistic a burst cannot move (the median-to-third-quartile noise spread),
+     or quiet windows read as signal and the threshold lands inside the noise.
 3. **M3 — `hackrf_proxy` integration**: transmitter entity + availability;
    verify a stock consumer would accept it (config-flow filter).
-4. **M4 — `proflame_protocol` + `proflame` TX**: encoder w/ capture-based
-   unit tests; entities; control the fireplace from HA.
+4. **M4 — `proflame_protocol` + `proflame` TX**: the Rust protocol half is
+   ~~done 2026-08-16~~ (`proxyd/src/proflame.rs`, both directions, pinned by
+   regression tests against `tests/`). Remaining: the HA consumer integration —
+   config flow with a transmitter picker, and entities.
 5. **M5 — RX state sync**: decoder, dispatcher bridge, loop protection;
-   physical remote and HA converge.
+   physical remote and HA converge. The daemon side already exists: `rx_frame`
+   events carry the timings, and `proflame::decode` turns them into frames.
 6. **M6 — polish**: reconnect robustness, diagnostics, docs, upstream PRs.
 
 ## 6. Open questions
 
-- Driver crate choice (M1 spike decides; both are nusb/pure-Rust).
-- TX sample synthesis rate & gain defaults (start from old prototype's
-  2 Msps; verify against capture SNR).
-- Whether daemon should support multiple simultaneous RX frequencies
-  (HackRF is single-tuner: no. Document as limitation; per-frame `frequency`
-  field keeps the API honest for future multi-SDR).
+Resolved:
+
+- ~~Driver crate choice~~ — seify-hackrfone; `rs-hackrf` is receive-only.
+- ~~TX sample synthesis rate & gain defaults~~ — 2 Msps, TX VGA 30 dB with the
+  amplifier off, which is what ignited the fireplace at living-room range. The
+  daemon takes both as options and a request may override the gain.
+- ~~Multiple simultaneous RX frequencies~~ — no, the HackRF is single-tuner.
+  `configure_rx` retunes the one receiver; the per-frame `frequency` field keeps
+  the API honest for a future multi-radio deployment.
+
+Still open:
+
+- Whether the receiver should ever be squelched automatically while Home
+  Assistant is not listening. It costs nothing but USB bandwidth today.
+- Authentication. The daemon is unauthenticated on the LAN, which is the same
+  posture as an ESPHome node, but it can *transmit* — the exposure is worth a
+  decision before it moves to a less trusted network.
 
 [arch-1365]: https://github.com/home-assistant/architecture/discussions/1365
 [release-2026-5]: https://www.home-assistant.io/blog/2026/05/06/release-20265/
