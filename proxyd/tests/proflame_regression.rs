@@ -158,13 +158,18 @@ fn thermostat_mode_frames_decode_and_carry_a_new_command_byte() {
 /// argument — a layout that merely fit the data would not survive three
 /// independent sweeps landing in three different places.
 ///
-/// It also settles two open questions. `fan` reaches 0, so the blower can be
-/// commanded off over RF rather than only turned down. And `fan` reading 3 in
-/// every earlier capture was the blower genuinely sitting at level 3.
+/// It also settles the open questions. `fan` reaches 0, so the blower can be
+/// commanded off over RF rather than only turned down; `fan` reading 3 in every
+/// earlier capture was the blower genuinely sitting at level 3; and cycling the
+/// pilot between intermittent and continuous moves `pilot` alone.
+///
+/// With this, every bit of both command bytes is accounted for by direct
+/// observation, except the two this appliance cannot exercise and the two
+/// reserved bits, which have never been set in any frame.
 #[test]
 fn the_sweeps_confirm_the_blower_light_and_flame_fields() {
     let frames = recorded_frames("frames/manual_sweeps.frames.jsonl");
-    assert_eq!(frames.len(), 314);
+    assert_eq!(frames.len(), 349);
 
     let states: Vec<proflame::State> = frames
         .iter()
@@ -172,12 +177,12 @@ fn the_sweeps_confirm_the_blower_light_and_flame_fields() {
         .filter_map(|d| Some(d.frame()?.state()))
         .collect();
 
-    // 268 of 314. The shortfall is fragmentary bursts — the edge counts run
+    // 298 of 349. The shortfall is fragmentary bursts — the edge counts run
     // down to 15 where a whole frame is 131 to 143 — so the signal dropped
     // mid-frame rather than being too weak, since nearly every frame arrived
     // saturated. It costs nothing: five identical frames carry each state,
     // and every step below survived.
-    assert_eq!(states.len(), 268, "fragmentary bursts are expected over an 81-minute session");
+    assert_eq!(states.len(), 298, "fragmentary bursts are expected over a session this long");
 
     let mut timeline: Vec<proflame::State> = Vec::new();
     for state in states {
@@ -213,8 +218,18 @@ fn the_sweeps_confirm_the_blower_light_and_flame_fields() {
     assert_eq!(seen(|s| s.fan), full, "the blower swept its whole range, including off");
     assert!(seen(|s| s.flame).is_superset(&BTreeSet::from([0, 1, 2, 3, 4, 5, 6])));
 
-    // Nothing in this session should have touched the fields it did not test.
-    assert!(timeline.iter().all(|s| !s.aux && !s.front && !s.pilot));
+    // Switching the pilot between intermittent and continuous moves `pilot`
+    // and nothing else, four times over. This appliance has no split flame and
+    // this handset has no separate aux control, so those two stay clear
+    // throughout — they are unreachable here rather than merely untested.
+    let pilot_steps: Vec<_> = timeline
+        .windows(2)
+        .map(|pair| pair[1].differences(&pair[0]))
+        .filter(|changed| changed == &["pilot"])
+        .collect();
+    assert_eq!(pilot_steps.len(), 4, "the pilot was cycled four times, alone each time");
+    assert!(timeline.iter().any(|s| s.pilot), "continuous pilot was seen");
+    assert!(timeline.iter().all(|s| !s.aux && !s.front));
 
     // The handset offers three thermostat choices — smart, standard, off —
     // but only ever puts one bit on the air, and the two spare bits of `cmd1`
