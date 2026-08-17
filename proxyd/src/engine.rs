@@ -248,12 +248,32 @@ impl State {
                     self.rx_running = false;
                 }
                 *detector = ook::Detector::new(self.config.detector);
-                // A retune is also a chance to recover: clear the fault and
-                // let the next pump try the radio, rather than making a client
-                // wait out the backoff it happens to have landed in.
+                // A retune is also a chance to recover: clear the fault rather
+                // than making a client wait out the backoff it happened to
+                // land in.
                 self.faulted = false;
+
+                // Bring the receiver up now, not on the next loop iteration,
+                // so that the reply says whether it actually came up. Deferring
+                // it would have "enable the receiver" answer with a cheerful
+                // "idle" and only then fault, which tells the client nothing it
+                // can act on.
+                let outcome = if self.rx_enabled {
+                    match device.start_rx(self.rx_frequency) {
+                        Ok(()) => {
+                            self.rx_running = true;
+                            Ok(())
+                        }
+                        Err(error) => {
+                            self.fault(&error, events);
+                            Err(error)
+                        }
+                    }
+                } else {
+                    Ok(())
+                };
                 self.publish(events);
-                let _ = reply.send(Ok(()));
+                let _ = reply.send(outcome);
             }
             Command::Status { reply } => {
                 let _ = reply.send(Box::new(wire::Status {
@@ -345,6 +365,16 @@ impl State {
 
         for burst in detector.push(buffer) {
             self.counters.rx_frames += 1;
+            // Debug rather than info: on 315 MHz a house hears car remotes,
+            // weather stations and doorbells, and none of that is worth a line
+            // in the journal by default.
+            log::debug!(
+                "burst: {} edges, {:.2} ms, peak {}/256, threshold {:?}",
+                burst.timings.len(),
+                ook::duration_us(&burst.timings) as f64 / 1000.0,
+                burst.peak,
+                detector.threshold()
+            );
             let _ =
                 events.send(wire::Message::event(wire::MessagePayload::RxFrame(wire::RxFrame {
                     frequency: self.rx_frequency,
@@ -401,6 +431,7 @@ mod tests {
         /// Fed to the arbiter one transfer at a time.
         rx_data: Vec<Vec<u8>>,
         fail_reads: usize,
+        fail_start_rx: usize,
     }
 
     #[derive(Clone, Default)]
@@ -416,7 +447,12 @@ mod tests {
 
     impl Transceiver for FakeRadio {
         fn start_rx(&mut self, frequency_hz: u64) -> Result<()> {
-            self.shared.lock().unwrap().actions.push(Action::StartRx(frequency_hz));
+            let mut shared = self.shared.lock().unwrap();
+            shared.actions.push(Action::StartRx(frequency_hz));
+            if shared.fail_start_rx > 0 {
+                shared.fail_start_rx -= 1;
+                return Err(anyhow::anyhow!("radio is not there"));
+            }
             Ok(())
         }
 
@@ -630,10 +666,29 @@ mod tests {
         std::thread::sleep(Duration::from_millis(50));
 
         harness.configure_rx(Some(433_920_000), true);
-        std::thread::sleep(Duration::from_millis(50));
 
+        // Already receiving by the time the reply lands, rather than a moment
+        // later: a client that enables the receiver and immediately asks for
+        // status should not be told "idle".
         assert!(harness.radio.actions().contains(&Action::StartRx(433_920_000)));
-        assert_eq!(harness.status().rx.frequency, 433_920_000);
+        let status = harness.status();
+        assert_eq!(status.rx.frequency, 433_920_000);
+        assert_eq!(status.state, wire::DeviceState::Receiving);
+    }
+
+    #[test]
+    fn enabling_a_receiver_that_cannot_start_reports_the_failure() {
+        let radio = FakeRadio::default();
+        radio.shared.lock().unwrap().fail_start_rx = 1;
+        let harness = Harness::start(config(), radio);
+
+        let (reply, response) = oneshot::channel();
+        harness.send(Command::ConfigureRx { frequency: None, enabled: true, reply });
+
+        assert!(
+            response.blocking_recv().unwrap().is_err(),
+            "the reply must carry the failure, not leave the client to infer it"
+        );
     }
 
     #[test]

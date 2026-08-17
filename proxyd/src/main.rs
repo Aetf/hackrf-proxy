@@ -20,6 +20,7 @@ use hackrf_proxyd::{engine, ook, proflame, radio, server};
 #[derive(Parser)]
 #[command(
     name = "hrf",
+    version,
     about = "A network-attached HackRF: serve it to Home Assistant, or capture, \
              demodulate, decode and replay OOK by hand"
 )]
