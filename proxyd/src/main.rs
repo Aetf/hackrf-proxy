@@ -104,6 +104,11 @@ enum Command {
         /// Which burst to write out, 1-indexed.
         #[arg(long, default_value_t = 1)]
         burst: usize,
+        /// Use the daemon's streaming detector instead of the two-pass
+        /// offline path, to see what a live receiver would have made of the
+        /// same signal.
+        #[arg(long)]
+        stream: bool,
         /// Write the selected burst as a Flipper-RAW timings JSON array.
         #[arg(long)]
         out: Option<PathBuf>,
@@ -226,6 +231,7 @@ fn main() -> Result<()> {
             min_edges,
             bucket_us,
             burst,
+            stream,
             out,
             out_all,
         } => demod(DemodArgs {
@@ -237,6 +243,7 @@ fn main() -> Result<()> {
             min_edges,
             bucket_us,
             burst,
+            stream,
             out: out.as_deref(),
             out_all: out_all.as_deref(),
         }),
@@ -264,6 +271,7 @@ struct DemodArgs<'a> {
     min_edges: usize,
     bucket_us: i64,
     burst: usize,
+    stream: bool,
     out: Option<&'a Path>,
     out_all: Option<&'a Path>,
 }
@@ -275,7 +283,18 @@ fn demod(args: DemodArgs<'_>) -> Result<()> {
         .read_to_end(&mut raw)?;
     ensure!(raw.len() >= ook::BYTES_PER_SAMPLE, "capture is empty");
 
-    let magnitude = ook::envelope(&raw);
+    let bursts = if args.stream { stream_demod(&raw, &args) } else { offline_demod(&raw, &args) };
+    ensure!(
+        !bursts.is_empty(),
+        "no bursts found — try --threshold 0.3, a smaller --min-edges, or check the capture"
+    );
+    report_bursts(&bursts, &args)
+}
+
+/// Two-pass: characterise the whole capture, then slice it at one threshold.
+/// Only a recording can do this, and it is the more sensitive of the two.
+fn offline_demod(raw: &[u8], args: &DemodArgs<'_>) -> Vec<Vec<i64>> {
+    let magnitude = ook::envelope(raw);
     let levels = ook::levels(&magnitude, args.threshold);
     println!(
         "{} samples ({:.2} s), noise floor {}, signal {}, threshold {}",
@@ -290,12 +309,49 @@ fn demod(args: DemodArgs<'_>) -> Result<()> {
     }
 
     let runs = ook::runs(&magnitude, levels.threshold, args.sample_rate, args.min_us);
-    let bursts = ook::split_bursts(&runs, args.gap_us, args.min_edges);
-    ensure!(
-        !bursts.is_empty(),
-        "no bursts found — try --threshold 0.3, a smaller --min-edges, or check the capture"
-    );
+    ook::split_bursts(&runs, args.gap_us, args.min_edges)
+}
 
+/// Run the capture through the daemon's own streaming detector, in chunks the
+/// size of a USB transfer.
+///
+/// This is what the receiver would have made of the same signal, so a capture
+/// that decodes offline but comes up empty here is a receiver problem worth
+/// knowing about before it shows up as a missed keypress on the air.
+fn stream_demod(raw: &[u8], args: &DemodArgs<'_>) -> Vec<Vec<i64>> {
+    let mut config = ook::DetectorConfig::new(args.sample_rate);
+    config.threshold_fraction = args.threshold;
+    config.min_us = args.min_us;
+    config.gap_us = args.gap_us;
+    config.min_edges = args.min_edges;
+
+    let mut detector = ook::Detector::new(config);
+    let mut bursts = Vec::new();
+    let mut peaks = Vec::new();
+    for chunk in raw.chunks(radio::TRANSFER_SIZE) {
+        for burst in detector.push(chunk) {
+            peaks.push(burst.peak);
+            bursts.push(burst.timings);
+        }
+    }
+
+    println!(
+        "{} samples ({:.2} s), streaming detector, final threshold {}",
+        raw.len() / ook::BYTES_PER_SAMPLE,
+        (raw.len() / ook::BYTES_PER_SAMPLE) as f64 / f64::from(args.sample_rate),
+        detector.threshold().map_or("none".to_string(), |t| t.to_string())
+    );
+    if !peaks.is_empty() {
+        println!(
+            "burst peaks {}..{} of 256",
+            peaks.iter().min().unwrap(),
+            peaks.iter().max().unwrap()
+        );
+    }
+    bursts
+}
+
+fn report_bursts(bursts: &[Vec<i64>], args: &DemodArgs<'_>) -> Result<()> {
     println!("\n{} burst(s):", bursts.len());
     for (index, burst) in bursts.iter().enumerate() {
         println!(
@@ -306,7 +362,7 @@ fn demod(args: DemodArgs<'_>) -> Result<()> {
         );
     }
 
-    if let Some(agreement) = ook::compare_bursts(&bursts).filter(|_| bursts.len() > 1) {
+    if let Some(agreement) = ook::compare_bursts(bursts).filter(|_| bursts.len() > 1) {
         if agreement.same_edge_count {
             println!(
                 "repeats agree: identical edge counts, max deviation {} µs{}",
@@ -333,7 +389,7 @@ fn demod(args: DemodArgs<'_>) -> Result<()> {
 
     if let Some(path) = args.out_all {
         let mut file = BufWriter::new(File::create(path)?);
-        serde_json::to_writer(&mut file, &bursts)?;
+        serde_json::to_writer(&mut file, bursts)?;
         file.flush()?;
         println!("\nwrote all {} bursts to {}", bursts.len(), path.display());
     }

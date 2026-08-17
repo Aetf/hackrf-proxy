@@ -13,7 +13,7 @@ use crate::ook;
 /// USB bulk transfers must be a multiple of 512 bytes.
 pub const XFER_ALIGN: usize = 512;
 /// Per-transfer size; the driver keeps three of these in flight.
-const TRANSFER_SIZE: usize = 32_768;
+pub const TRANSFER_SIZE: usize = 32_768;
 /// Transfers the driver keeps queued, which is also how much tail can be lost
 /// when a stream is dropped.
 const IN_FLIGHT_TRANSFERS: usize = 3;
