@@ -1,0 +1,24 @@
+# Grant read/write access to HackRF device nodes.
+#
+# The distro hackrf package already ships 53-hackrf.rules, but it grants access
+# with TAG+="uaccess" alone. That is an ACL logind hands to a user with an
+# active local seat, so on a headless machine reached over SSH nothing is
+# granted: the node stays root:root 0664, readable but not writable, and the
+# radio cannot be opened. Symptom: "HackRF is present at /dev/bus/usb/... but
+# could not be opened".
+#
+# This file supplements rather than replaces that rule, so new device ids keep
+# coming from the package. The higher number makes it win for MODE and GROUP.
+# Change `wheel` to any group you belong to.
+#
+# Install as root:
+#   cp deploy/60-hackrf-access.rules /etc/udev/rules.d/
+#   udevadm control --reload-rules && udevadm trigger
+#
+# On the aconfmgr-managed homelab this lives in roles/sdr.bash instead; see
+# proxyd/README.md.
+ATTR{idVendor}=="1d50", ATTR{idProduct}=="6089", MODE="0660", GROUP="wheel"
+ATTR{idVendor}=="1d50", ATTR{idProduct}=="604b", MODE="0660", GROUP="wheel"
+ATTR{idVendor}=="1d50", ATTR{idProduct}=="cc15", MODE="0660", GROUP="wheel"
+# NXP DFU bootloader, for firmware recovery
+ATTR{idVendor}=="1fc9", ATTR{idProduct}=="000c", MODE="0660", GROUP="wheel"

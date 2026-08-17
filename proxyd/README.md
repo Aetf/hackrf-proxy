@@ -51,14 +51,22 @@ Captures are written to `./captures` on the host (override with
 Required for both the container and the native binary; the rule install needs
 root, the tool itself does not.
 
-    sudo cp deploy/53-hackrf.rules /etc/udev/rules.d/
+**Installing the distro `hackrf` package is not enough.** Its
+`53-hackrf.rules` grants access with `TAG+="uaccess"` alone, which is an ACL
+logind hands to a user with an active *local seat*. Over SSH there is no seat,
+so nothing is granted: `getfacl` on the node shows no ACL entries and the node
+stays `root:root 0664` — readable, not writable, so the radio cannot be opened.
+
+    sudo cp deploy/60-hackrf-access.rules /etc/udev/rules.d/
     sudo udevadm control --reload-rules && sudo udevadm trigger
 
-Then unplug and re-plug the HackRF. Without this the node is `root:root 0664`,
-so it is read-only for everyone else and the radio cannot be opened. The rule
-uses the `wheel` group because this host has no `plugdev`; change it to any
-group you belong to. `TAG+="uaccess"` alone is not enough, as it only covers
-local seat logins, not SSH sessions.
+The rule supplements the packaged one rather than replacing it, so new device
+ids keep coming from the package. It uses the `wheel` group because this host
+has no `plugdev`; change it to any group you belong to.
+
+On the aconfmgr-managed homelab, this belongs in the config rather than being
+dropped into `/etc` by hand — it is `roles/sdr.bash` there, enabled from the
+host config, and applied with `aconfmgr apply`.
 
 `hrf info` should then print a board id and firmware version. If it instead
 reports that the HackRF is present but could not be opened, and names a node

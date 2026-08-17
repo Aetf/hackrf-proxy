@@ -37,7 +37,8 @@ pub fn open() -> Result<Arc<HackRf>> {
             };
             Err(anyhow::Error::new(err).context(format!(
                 "HackRF is present at /dev/bus/usb/{bus:03}/{address:03} but could not be opened; \
-                 the node needs read/write access (install deploy/53-hackrf.rules and re-plug), \
+                 the node needs read/write access (install deploy/60-hackrf-access.rules; the \
+                 distro rule only sets uaccess, which grants nothing over SSH), \
                  and in a container it must be passed through and the process must run as root"
             )))
         }
