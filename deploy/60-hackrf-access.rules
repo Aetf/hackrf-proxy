@@ -1,4 +1,4 @@
-# Grant read/write access to HackRF device nodes.
+# Grant read/write access to HackRF device nodes, and keep them awake.
 #
 # The distro hackrf package already ships 53-hackrf.rules, but it grants access
 # with TAG+="uaccess" alone. That is an ACL logind hands to a user with an
@@ -7,9 +7,18 @@
 # radio cannot be opened. Symptom: "HackRF is present at /dev/bus/usb/... but
 # could not be opened".
 #
-# This file supplements rather than replaces that rule, so new device ids keep
-# coming from the package. The higher number makes it win for MODE and GROUP.
-# Change `wheel` to any group you belong to.
+# The second job here is USB autosuspend. It is a known HackRF problem and the
+# classic symptom is `hackrf_info` failing once and succeeding immediately
+# afterwards. For a daemon that streams continuously it shows up differently
+# and worse: a suspended device fails its next bulk transfer with "hardware
+# fault or protocol violation", and because control transfers still answer, a
+# naive recovery check thinks the radio is fine and restarts straight into the
+# same failure. We watched exactly that on the XPS — 435 faults, 408 of them
+# spaced at precisely the retry interval.
+#
+# This file supplements rather than replaces the packaged rule, so new device
+# ids keep coming from the package. The higher number makes it win for MODE and
+# GROUP. Change `wheel` to any group you belong to.
 #
 # Install as root:
 #   cp deploy/60-hackrf-access.rules /etc/udev/rules.d/
@@ -17,8 +26,25 @@
 #
 # On the aconfmgr-managed homelab this lives in roles/sdr.bash instead; see
 # proxyd/README.md.
+#
+# NOT ENOUGH ON A LAPTOP RUNNING TLP. TLP applies its own USB power policy
+# after udev and will turn autosuspend back on, so the device also has to be
+# listed there:
+#   /etc/tlp.d/10-hackrf.conf:  USB_DENYLIST="1d50:6089"
+#   systemctl restart tlp
+# (`USB_DENYLIST` since TLP 1.4; older versions call it `USB_BLACKLIST`.)
+# Access. Left exactly as it was when it was proven to work, rather than having
+# power management folded into the same lines where a mistake would take the
+# permissions down with it.
 ATTR{idVendor}=="1d50", ATTR{idProduct}=="6089", MODE="0660", GROUP="wheel"
 ATTR{idVendor}=="1d50", ATTR{idProduct}=="604b", MODE="0660", GROUP="wheel"
 ATTR{idVendor}=="1d50", ATTR{idProduct}=="cc15", MODE="0660", GROUP="wheel"
 # NXP DFU bootloader, for firmware recovery
 ATTR{idVendor}=="1fc9", ATTR{idProduct}=="000c", MODE="0660", GROUP="wheel"
+
+# Power. Separate lines, matched on the USB device itself: `power/control` is
+# reported to be unreliable when set from udev (systemd#14491), so use the
+# autosuspend timer, which is the form the HackRF community documents.
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="1d50", ATTR{idProduct}=="6089", ATTR{power/autosuspend}="-1"
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="1d50", ATTR{idProduct}=="604b", ATTR{power/autosuspend}="-1"
+ACTION=="add", SUBSYSTEM=="usb", ATTR{idVendor}=="1d50", ATTR{idProduct}=="cc15", ATTR{power/autosuspend}="-1"

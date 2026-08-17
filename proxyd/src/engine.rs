@@ -98,8 +98,12 @@ impl Config {
     }
 }
 
-/// How long to wait before reopening a radio that failed.
+/// How long to wait before reopening a radio that has just failed. Doubles on
+/// each consecutive failure, and resets once a transfer actually arrives.
 const FAULT_BACKOFF: Duration = Duration::from_secs(2);
+/// Ceiling on that backoff. A radio that has been broken for a minute is
+/// unlikely to be fixed by asking again sooner.
+const MAX_FAULT_BACKOFF: Duration = Duration::from_secs(60);
 /// How long the thread parks while faulted before looking at its inbox again.
 /// Short enough that a client's request is not noticeably delayed.
 const FAULT_POLL: Duration = Duration::from_millis(100);
@@ -163,6 +167,11 @@ struct State {
     rx_running: bool,
     faulted: bool,
     retry_at: Instant,
+    /// Current retry interval, doubling while failures continue.
+    backoff: Duration,
+    /// Whether a transfer has arrived since the last fault. Until one has,
+    /// leaving the fault state is only a hypothesis.
+    receiving_proven: bool,
     device: Option<String>,
     counters: wire::Counters,
     published: Option<wire::DeviceState>,
@@ -176,6 +185,8 @@ impl State {
             rx_running: false,
             faulted: false,
             retry_at: Instant::now(),
+            backoff: FAULT_BACKOFF,
+            receiving_proven: false,
             device: device.describe().ok(),
             counters: wire::Counters::default(),
             published: None,
@@ -213,11 +224,19 @@ impl State {
     }
 
     fn fault(&mut self, error: &anyhow::Error, events: &broadcast::Sender<wire::Message>) {
-        log::error!("radio fault: {error:#}");
+        // A radio that keeps failing the moment it is restarted would otherwise
+        // log this on every cycle for as long as it stays broken, so only the
+        // first failure of a run is loud.
+        if self.receiving_proven || self.counters.device_faults == 0 {
+            log::error!("radio fault: {error:#}");
+        } else {
+            log::debug!("radio fault: {error:#}");
+        }
         self.faulted = true;
         self.rx_running = false;
+        self.receiving_proven = false;
         self.counters.device_faults += 1;
-        self.retry_at = Instant::now() + FAULT_BACKOFF;
+        self.back_off();
         self.publish(events);
     }
 
@@ -363,6 +382,17 @@ impl State {
             return;
         }
 
+        // A transfer arrived, so the radio is genuinely working — which is the
+        // only evidence worth resetting the backoff on. Control transfers keep
+        // answering on a device whose streaming is broken.
+        if !self.receiving_proven {
+            self.receiving_proven = true;
+            self.backoff = FAULT_BACKOFF;
+            if self.counters.device_faults > 0 {
+                log::info!("radio recovered after {} fault(s)", self.counters.device_faults);
+            }
+        }
+
         for burst in detector.push(buffer) {
             self.counters.rx_frames += 1;
             // Debug rather than info: on 315 MHz a house hears car remotes,
@@ -386,6 +416,15 @@ impl State {
     }
 
     /// Try to bring a failed radio back, without spinning on it.
+    ///
+    /// Coming out of the fault is deliberately provisional. A HackRF whose
+    /// bulk streaming is broken still answers control transfers perfectly
+    /// well, so asking it to identify itself proves almost nothing — on the
+    /// XPS that produced 435 faults, 408 of them spaced at exactly the retry
+    /// interval, each one a confident "radio recovered" followed immediately
+    /// by the same failed read. Recovery is only believed once a transfer has
+    /// actually arrived, which is why [`Self::pump`] clears the backoff and
+    /// this does not.
     fn retry<T: Transceiver>(&mut self, device: &mut T, events: &broadcast::Sender<wire::Message>) {
         if Instant::now() < self.retry_at {
             std::thread::sleep(FAULT_POLL);
@@ -394,16 +433,24 @@ impl State {
         let _ = device.stop();
         match device.describe() {
             Ok(description) => {
-                log::info!("radio recovered: {description}");
+                log::debug!("radio answered again, trying to receive: {description}");
                 self.device = Some(description);
                 self.faulted = false;
                 self.publish(events);
             }
             Err(error) => {
                 log::debug!("radio still unavailable: {error:#}");
-                self.retry_at = Instant::now() + FAULT_BACKOFF;
+                self.back_off();
             }
         }
+    }
+
+    /// Widen the retry interval, so a radio that is persistently broken is not
+    /// hammered — and does not fill the journal — while a one-off glitch is
+    /// still picked up promptly.
+    fn back_off(&mut self) {
+        self.backoff = (self.backoff * 2).min(MAX_FAULT_BACKOFF);
+        self.retry_at = Instant::now() + self.backoff;
     }
 }
 
@@ -766,6 +813,32 @@ mod tests {
             vec![wire::DeviceState::Transmitting, wire::DeviceState::Receiving],
             "expected busy then back, with no idle in between"
         );
+    }
+
+    /// The failure this was written for, observed on the XPS: a radio whose
+    /// bulk streaming is broken still answers control transfers, so every
+    /// retry declared success and immediately failed again — 435 faults, 408
+    /// of them spaced at exactly the retry interval, for three and a half
+    /// hours. The backoff has to widen on repeated failure and may only reset
+    /// when a transfer actually arrives.
+    #[test]
+    fn a_radio_that_answers_but_cannot_stream_is_backed_off_rather_than_hammered() {
+        let radio = FakeRadio::default();
+        // describe() keeps working — as the real device did — while every
+        // read fails.
+        radio.shared.lock().unwrap().fail_reads = usize::MAX;
+        let harness = Harness::start(config(), radio);
+
+        std::thread::sleep(Duration::from_secs(3));
+        let faults = harness.status().counters.device_faults;
+
+        // With a fixed two-second retry this would be climbing steadily. With
+        // the backoff doubling from two seconds it cannot get past a handful.
+        assert!(
+            (1..=3).contains(&faults),
+            "expected the retry interval to widen, but saw {faults} faults in three seconds"
+        );
+        assert_eq!(harness.status().state, wire::DeviceState::Faulted);
     }
 
     #[test]
