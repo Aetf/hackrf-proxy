@@ -41,6 +41,14 @@ Captures are written to `./captures` on the host (override with
   invoking user on the host, which is the identity the udev rule grants access
   to. Any other user inside the container maps into the subuid range
   (`aetf:100000:65536` here) and cannot open the node at all.
+- **`--group-add keep-groups` is required**, and its absence is the confusing
+  case: the host user can open the device while the container cannot, even
+  though the container is that same user. A rootless container maps only the
+  uid and the primary gid, so membership of the group the udev rule grants
+  access through — `wheel` here — is dropped. `keep-groups` asks crun to keep
+  the host's supplementary groups for the kernel's permission check. Inside the
+  container they then show up as `65534`, since they have no mapping in the
+  namespace; that is expected and access still works.
 - **`/dev/bus/usb` is bind-mounted as a directory** rather than passed as a
   single `--device`. The HackRF changes its device number whenever it
   re-enumerates — on re-plug, and after a device reset — and a stale `--device`
@@ -118,6 +126,11 @@ Step 4 is the project's go/no-go: does the fireplace react?
 
 Tune `--threshold` (fraction between noise floor and signal), `--min-us`
 (glitch floor) and `--gap-us` until the clusters are clean.
+
+For reference, three seconds of ambient 315 MHz with nothing transmitting, at
+the default `--lna 40 --vga 40`, measured a noise floor of 24 and a 99.9th
+percentile of 110, and `demod` correctly found no bursts. A remote keypress
+should stand well clear of that.
 
 ## Caveats worth knowing before decoding
 

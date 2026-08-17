@@ -19,7 +19,13 @@ tty=""
 # after a device reset, and a stale --device path fails in a way that looks like
 # missing hardware. A bind mount of the directory picks the new node up on its
 # own.
+# --group-add keep-groups: the udev rule grants access through the `wheel`
+# group, but a rootless container only maps the user's uid and primary gid, so
+# supplementary group membership is dropped and the node stays unreadable even
+# though the same user can open it on the host. This asks crun to keep the
+# host's supplementary groups for the permission check.
 exec podman run --rm $tty \
+	--group-add keep-groups \
 	-v /dev/bus/usb:/dev/bus/usb \
 	-v "$captures":/captures \
 	"$image" "$@"
