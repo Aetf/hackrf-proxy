@@ -110,11 +110,10 @@ pub fn capture(params: &CaptureParams, out: &Path) -> Result<()> {
     // 4 MB/s, and with no transfer in flight while we write to disk the
     // hardware FIFO overruns. Dropped samples silently shorten pulse widths,
     // which is exactly the measurement this tool exists to make.
-    let mut stream = radio
-        .start_rx_stream(TRANSFER_SIZE)
-        .context("failed to start RX stream")?;
+    let mut stream = radio.start_rx_stream(TRANSFER_SIZE).context("failed to start RX stream")?;
 
-    let total_bytes = (params.seconds * f64::from(params.sample_rate)) as usize * ook::BYTES_PER_SAMPLE;
+    let total_bytes =
+        (params.seconds * f64::from(params.sample_rate)) as usize * ook::BYTES_PER_SAMPLE;
     let bytes_per_second = params.sample_rate as usize * ook::BYTES_PER_SAMPLE;
     let mut file =
         BufWriter::new(File::create(out).with_context(|| format!("create {}", out.display()))?);

@@ -9,17 +9,29 @@ rejected: it is receive-only and cannot drive the transmit path.
 
 ## Layout
 
-    src/ook.rs     signal processing: IQ <-> timings, bursts, histograms (unit tested)
-    src/radio.rs   device handling: gain validation, streaming capture and transmit
-    src/main.rs    CLI
+The crate is a library with a thin CLI on top, so the M2 daemon links the same
+modules instead of growing out of the CLI:
 
-`ook.rs` is deliberately hardware-free, so the analysis that M1's conclusions
-rest on can be tested against synthetic signals: `cargo test`.
+    src/lib.rs       crate root; the layering contract lives in its doc comment
+    src/ook.rs       signal processing: IQ <-> timings, bursts, histograms
+    src/proflame.rs  the Proflame protocol: timings <-> frames, checksums, keys
+    src/radio.rs     device handling: gain validation, streaming capture and transmit
+    src/main.rs      the hrf CLI
+    tests/           regression against ../tests (inherited table + own captures)
+
+`ook.rs` and `proflame.rs` are deliberately hardware-free, so everything the
+protocol conclusions rest on can be tested without a radio. The integration
+tests freeze the M1 results in place: all 440 checksum bytes of the inherited
+`cmd.csv`, and every clean frame of our own captures, must keep decoding to
+exactly the values documented in docs/PROTOCOL.md. `tools/decode_proflame.py`
+remains as an independent reference implementation; its report and `hrf
+decode`'s agree byte for byte on the regression captures.
 
 ## Build
 
     cargo build --release      # binary at target/release/hrf
-    cargo test                 # 12 tests, no hardware needed
+    cargo test                 # unit + regression tests, no hardware needed
+    cargo fmt && cargo clippy  # style is pinned by rustfmt.toml
 
 Or build the container, which is how it is meant to be run — see below.
 
@@ -108,8 +120,14 @@ under `/dev/bus/usb`, the rule has not taken effect yet.
     #    immediately rather than at demodulation time.
     hrf capture --freq 315000000 --seconds 5 --out captures/flame_up.cs8
 
-    # 3. Demodulate offline, as often as you like.
-    hrf demod --in captures/flame_up.cs8 --out captures/flame_up.json
+    # 3. Demodulate offline, as often as you like. For Proflame use
+    #    --gap-us 3000: the inter-frame gap is 4.15 ms, so the 10 ms default
+    #    merges repeats into one blob.
+    hrf demod --in captures/flame_up.cs8 --gap-us 3000 --out captures/flame_up.json
+
+    # 3b. Decode the Proflame framing: fields per frame, framing violations,
+    #     and the per-remote checksum constants.
+    hrf decode --in captures/flame_up.json
 
     # 4. Replay. Keep --amp off at close range.
     hrf transmit --freq 315000000 --file captures/flame_up.json --repeat 4

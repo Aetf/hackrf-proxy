@@ -6,15 +6,14 @@
 //! the remote gets pressed once, then the demodulator can be re-run offline
 //! with different settings as often as needed.
 
-mod ook;
-mod radio;
-
+use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{ensure, Context, Result};
 use clap::{Parser, Subcommand};
+use hackrf_proxyd::{ook, proflame, radio};
 
 #[derive(Parser)]
 #[command(name = "hrf", about = "HackRF M1 spike: capture, demodulate and replay OOK")]
@@ -114,6 +113,18 @@ enum Command {
         out_all: Option<PathBuf>,
     },
 
+    /// Decode Proflame frames from demodulated timings.
+    ///
+    /// Accepts the JSON written by `demod --out` (one burst) or `--out-all`
+    /// (a list of bursts). Prints every burst's fields, the framing rules
+    /// that failed, and the per-remote checksum constants derived from the
+    /// clean frames.
+    Decode {
+        /// Timings JSON file(s); repeatable.
+        #[arg(long, value_name = "FILE", required = true)]
+        r#in: Vec<PathBuf>,
+    },
+
     /// Transmit OOK from a Flipper-RAW timings JSON array.
     Transmit {
         #[arg(long, default_value = "315M", value_parser = parse_frequency)]
@@ -160,10 +171,7 @@ fn parse_frequency(input: &str) -> Result<u64> {
             },
         },
     };
-    let value: f64 = digits
-        .trim()
-        .parse()
-        .with_context(|| format!("not a frequency: {input}"))?;
+    let value: f64 = digits.trim().parse().with_context(|| format!("not a frequency: {input}"))?;
     ensure!(value.is_finite() && value > 0.0, "not a frequency: {input}");
     let hz = (value * multiplier).round() as u64;
 
@@ -210,21 +218,29 @@ fn main() -> Result<()> {
             &out,
         ),
         Command::Demod {
-            r#in, rate, threshold, min_us, gap_us, min_edges, bucket_us, burst, out, out_all
-        } => {
-            demod(DemodArgs {
-                input: &r#in,
-                sample_rate: rate,
-                threshold,
-                min_us,
-                gap_us,
-                min_edges,
-                bucket_us,
-                burst,
-                out: out.as_deref(),
-                out_all: out_all.as_deref(),
-            })
-        }
+            r#in,
+            rate,
+            threshold,
+            min_us,
+            gap_us,
+            min_edges,
+            bucket_us,
+            burst,
+            out,
+            out_all,
+        } => demod(DemodArgs {
+            input: &r#in,
+            sample_rate: rate,
+            threshold,
+            min_us,
+            gap_us,
+            min_edges,
+            bucket_us,
+            burst,
+            out: out.as_deref(),
+            out_all: out_all.as_deref(),
+        }),
+        Command::Decode { r#in } => decode(&r#in),
         Command::Transmit { freq, rate, txvga, amp, repeat, gap_us, file } => {
             transmit(freq, rate, txvga, amp, repeat, gap_us, &file)
         }
@@ -325,14 +341,104 @@ fn demod(args: DemodArgs<'_>) -> Result<()> {
         let mut file = BufWriter::new(File::create(path)?);
         serde_json::to_writer(&mut file, selected)?;
         file.flush()?;
-        println!(
-            "\nwrote burst {} ({} timings) to {}",
-            args.burst,
-            selected.len(),
-            path.display()
-        );
+        println!("\nwrote burst {} ({} timings) to {}", args.burst, selected.len(), path.display());
     }
     Ok(())
+}
+
+/// `demod --out` writes one burst, `--out-all` a list of bursts; accept both.
+#[derive(serde::Deserialize)]
+#[serde(untagged)]
+enum TimingsFile {
+    Many(Vec<Vec<i64>>),
+    One(Vec<i64>),
+}
+
+fn decode(paths: &[PathBuf]) -> Result<()> {
+    let mut all_good = true;
+    for path in paths {
+        println!("=== {}", path.display());
+        let json =
+            std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
+        let bursts = match serde_json::from_str(&json)
+            .with_context(|| format!("{}: not a timings JSON file", path.display()))?
+        {
+            TimingsFile::Many(bursts) => bursts,
+            TimingsFile::One(burst) => vec![burst],
+        };
+        all_good &= report(&bursts);
+        println!();
+    }
+    ensure!(all_good, "some files had no clean frames or inconsistent checksum constants");
+    Ok(())
+}
+
+/// Print one file's bursts; true when at least one frame decoded cleanly and
+/// the derived checksum constants agree across all clean frames.
+fn report(bursts: &[Vec<i64>]) -> bool {
+    let decoded: Vec<_> = bursts.iter().map(|b| proflame::decode(b)).collect();
+
+    println!("{} frame(s)\n", bursts.len());
+    print!("  frame ");
+    for name in proflame::FIELD_NAMES {
+        print!("{name:>11}");
+    }
+    println!();
+    for (number, burst) in decoded.iter().enumerate() {
+        print!("  {:>5} ", number + 1);
+        for block in &burst.blocks {
+            match block {
+                Some(value) => print!("{:>11}", format!("0x{value:02x}")),
+                None => print!("{:>11}", "--"),
+            }
+        }
+        if !burst.problems.is_empty() {
+            let notes: Vec<_> = burst.problems.iter().map(ToString::to_string).collect();
+            print!("   <- {}", notes.join("; "));
+        }
+        println!();
+    }
+
+    let clean: Vec<_> = decoded.iter().filter_map(|d| Some((d.frame()?, d.keys()?))).collect();
+    if clean.is_empty() {
+        println!("\nno cleanly decoded frames");
+        return false;
+    }
+    println!(
+        "\n{}/{} frames decoded with parity, stop and framing intact",
+        clean.len(),
+        bursts.len()
+    );
+
+    let mut distinct: BTreeMap<[u8; proflame::FRAME_BLOCKS], usize> = BTreeMap::new();
+    for (frame, keys) in &clean {
+        *distinct.entry(frame.blocks(*keys)).or_default() += 1;
+    }
+    println!("{} distinct frame value(s):", distinct.len());
+    let mut by_count: Vec<_> = distinct.into_iter().collect();
+    by_count.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
+    for (blocks, count) in by_count {
+        print!("  ");
+        for (name, value) in proflame::FIELD_NAMES.iter().zip(blocks) {
+            print!(" {name}=0x{value:02x}");
+        }
+        println!("   x{count}");
+    }
+
+    let k1: std::collections::BTreeSet<u8> = clean.iter().map(|(_, k)| k.k1).collect();
+    let k2: std::collections::BTreeSet<u8> = clean.iter().map(|(_, k)| k.k2).collect();
+    let show = |set: &std::collections::BTreeSet<u8>| {
+        let values: Vec<_> = set.iter().map(|k| format!("0x{k:02x}")).collect();
+        format!(
+            "K = {}  {}",
+            values.join(", "),
+            if set.len() == 1 { "consistent" } else { "INCONSISTENT" }
+        )
+    };
+    println!("\nchecksum model  cs = M(cmd) ^ K");
+    println!("   half 1: {}", show(&k1));
+    println!("   half 2: {}", show(&k2));
+    k1.len() == 1 && k2.len() == 1
 }
 
 fn transmit(
