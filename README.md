@@ -12,8 +12,8 @@ HackRF, ignited the fireplace from cold. The on/off bit has since been captured
 too, so RF can both start and stop the appliance. The daemon exists, runs, and
 has been exercised against the real radio over the network — receiving for
 hours, retuning, transmitting and handing the radio back, and recovering from
-several hundred real USB faults without help. The one thing still unconfirmed
-is a received *frame*, which needs the remote pressed while it listens.
+several hundred real USB faults without help. It has decoded live frames off
+the air from the fireplace remote, which closes the last of it.
 
 What exists:
 
@@ -28,8 +28,9 @@ What exists:
 - `tools/` — `wsprobe.py` (dependency-free WebSocket client for the daemon),
   `decode_proflame.py` (reference decoder) and `analyze_cmd_csv.py`
   (re-derives the checksum from the inherited table).
-- `tests/` — `cmd.csv` (220 inherited packets, 5 remotes) and
-  `frames/*.timings.json` (our own demodulated captures).
+- `tests/` — `cmd.csv` (220 inherited packets, 5 remotes),
+  `frames/*.timings.json` (bench captures) and `frames/*.frames.jsonl`
+  (recorded by the daemon).
 - `deploy/` — Containerfile, quadlet unit, podman wrapper, udev rule.
 
 What does not exist yet: both Home Assistant integrations (M3 and M4's consumer
@@ -84,7 +85,9 @@ udev and rootless-podman traps that cost real time here.
    ported and tested; what is missing is the HA side — config flow with a
    transmitter picker, and the entities.
 3. Map the remaining fields with controlled captures: one button per capture,
-   compare against a known state. Fan, accent light, aux, thermostat.
+   compare against a known state. Fan, accent light, aux; and confirm the
+   thermostat bit, which so far is only a correlation. Use
+   `hrf serve --record` for these — it survives restarts and disconnects.
 4. Decide where the radio finally lives. The garage cannot hear the fireplace;
    candidates are a small host in the living room or an ESP32-C6 with a CC1101
    beside the fireplace, which would be a native HA transmitter needing no

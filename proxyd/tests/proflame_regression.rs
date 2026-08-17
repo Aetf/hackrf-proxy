@@ -104,6 +104,47 @@ fn power_capture_isolates_the_on_off_bit() {
     assert_eq!(states, BTreeSet::from([0x00, 0x01]), "on/off is the only field that moved");
 }
 
+/// The first capture taken through the daemon rather than the bench tools,
+/// and the first with the appliance in thermostat ("smart") mode.
+///
+/// Two things it pins down. The checksum model predicts `cmd1 = 0x03`, a
+/// command byte no earlier capture contained, which is independent evidence
+/// that it generalises rather than fitting what we had. And in thermostat mode
+/// the remote drives the flame level itself — here stepping `0x31` to `0x30`
+/// three seconds apart, unprompted — which is the behaviour that will fight
+/// Home Assistant if M5 treats received frames as user intent.
+#[test]
+fn thermostat_mode_frames_decode_and_carry_a_new_command_byte() {
+    let bursts: Vec<Vec<i64>> = data("frames/smart_mode.frames.jsonl")
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            serde_json::from_str::<serde_json::Value>(line).unwrap()["timings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| t.as_i64().unwrap())
+                .collect()
+        })
+        .collect();
+    assert_eq!(bursts.len(), 10);
+
+    let clean: Vec<_> = bursts
+        .iter()
+        .map(|b| proflame::decode(b))
+        .filter_map(|d| Some((d.frame()?, d.keys()?)))
+        .collect();
+
+    assert_eq!(clean.len(), 10, "every frame the daemon recorded should decode");
+    for (frame, keys) in &clean {
+        assert_eq!(*keys, Keys { k1: 0x0a, k2: 0x86 }, "same remote as the bench captures");
+        assert_eq!(frame.cmd1, 0x03, "on, with the bit that is only set in smart mode");
+    }
+
+    let levels: BTreeSet<u8> = clean.iter().map(|(f, _)| f.cmd2).collect();
+    assert_eq!(levels, BTreeSet::from([0x30, 0x31]), "the remote stepped the flame down itself");
+}
+
 /// Re-encoding a captured frame and decoding it again must reproduce the
 /// frame — the byte-level guarantee that lets the encoder transmit exactly
 /// what the remote sent.
