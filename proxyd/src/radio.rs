@@ -306,6 +306,44 @@ pub fn transmit(params: &TransmitParams, samples: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// USB ids the HackRF family enumerates as.
+const HACKRF_VENDOR_ID: u16 = 0x1d50;
+const HACKRF_PRODUCT_IDS: [u16; 3] = [
+    0x6089, // HackRF One
+    0x604b, // Jawbreaker
+    0xcc15, // rad1o
+];
+
+/// Yield once for every HackRF that appears on the USB bus.
+///
+/// This is what lets a replugged radio be picked up in the moment rather than
+/// on the next retry. It does **not** replace the arbiter's backoff, because
+/// the two cover different failures: a device that vanishes and returns raises
+/// a hotplug event, while a device that stays enumerated but stops streaming —
+/// which is what USB autosuspend produces, and what cost us three and a half
+/// hours of a two-second retry loop — never raises one at all.
+///
+/// nusb's Linux implementation is a raw `AF_NETLINK`/`KOBJECT_UEVENT` socket
+/// that parses udev's message format itself, so this keeps the project's "no C
+/// dependencies" property: no libudev, and nusb is already underneath the
+/// driver we use.
+pub fn watch_for_arrivals() -> Result<impl futures_util::Stream<Item = ()>> {
+    use futures_util::StreamExt as _;
+
+    let watch = nusb::watch_devices().context("failed to watch USB for hotplug events")?;
+    Ok(watch.filter_map(|event| async move {
+        match event {
+            nusb::hotplug::HotplugEvent::Connected(device)
+                if device.vendor_id() == HACKRF_VENDOR_ID
+                    && HACKRF_PRODUCT_IDS.contains(&device.product_id()) =>
+            {
+                Some(())
+            }
+            _ => None,
+        }
+    }))
+}
+
 /// Gains and rate the daemon drives the radio with.
 #[derive(Debug, Clone, Copy)]
 pub struct DeviceSettings {

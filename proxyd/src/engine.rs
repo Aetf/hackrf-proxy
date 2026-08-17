@@ -72,6 +72,13 @@ pub enum Command {
     Status {
         reply: oneshot::Sender<Box<wire::Status>>,
     },
+    /// A radio appeared on the USB bus. Retry now rather than waiting out the
+    /// backoff, which after a few failures is a minute long.
+    ///
+    /// Advisory: it shortens the wait, it does not decide anything. A radio
+    /// that never left the bus produces no such event, so the backoff stays as
+    /// the mechanism that actually guarantees recovery.
+    DeviceArrived,
 }
 
 #[derive(Debug, Clone)]
@@ -343,6 +350,13 @@ impl State {
                 };
                 self.publish(events);
                 let _ = reply.send(outcome);
+            }
+            Command::DeviceArrived => {
+                if self.faulted {
+                    log::info!("a HackRF appeared on the bus, retrying now");
+                    self.retry_at = Instant::now();
+                    self.backoff = FAULT_BACKOFF;
+                }
             }
             Command::Status { reply } => {
                 let _ = reply.send(Box::new(wire::Status {
@@ -930,6 +944,34 @@ mod tests {
             "expected the retry interval to widen, but saw {faults} faults in three seconds"
         );
         assert_eq!(harness.status().state, wire::DeviceState::Faulted);
+    }
+
+    /// Hotplug shortens the wait; it does not do the recovering. A radio that
+    /// comes back after the backoff has widened should be picked up at once
+    /// rather than a minute later.
+    #[test]
+    fn a_hotplug_arrival_cuts_short_the_backoff() {
+        let radio = FakeRadio::default();
+        radio.shared.lock().unwrap().fail_reads = usize::MAX;
+        let mut harness = Harness::start(config(), radio);
+
+        // Let it fault a few times so the backoff has grown past two seconds.
+        std::thread::sleep(Duration::from_secs(3));
+        assert_eq!(harness.status().state, wire::DeviceState::Faulted);
+
+        // The radio "comes back", then the bus says so.
+        harness.radio.shared.lock().unwrap().fail_reads = 0;
+        harness.send(Command::DeviceArrived);
+
+        assert_eq!(
+            harness.wait_for(|m| match &m.payload {
+                wire::MessagePayload::DeviceState { state: wire::DeviceState::Receiving } =>
+                    Some(()),
+                _ => None,
+            }),
+            Some(()),
+            "it should retry on the arrival rather than waiting out the backoff"
+        );
     }
 
     #[test]

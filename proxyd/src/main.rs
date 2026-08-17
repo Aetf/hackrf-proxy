@@ -525,6 +525,27 @@ fn serve(listen: &str, settings: radio::DeviceSettings, config: engine::Config) 
         let listener = tokio::net::TcpListener::bind(listen)
             .await
             .with_context(|| format!("failed to listen on {listen}"))?;
+
+        // Tell the radio thread when a HackRF appears, so a replugged radio is
+        // picked up in the moment instead of on the next retry. Failing to set
+        // this up is not fatal: the arbiter's backoff still recovers, just
+        // more slowly, and losing hotplug is not a reason to refuse to serve.
+        match radio::watch_for_arrivals() {
+            Ok(arrivals) => {
+                let commands = commands.clone();
+                tokio::spawn(async move {
+                    use futures_util::StreamExt as _;
+                    let mut arrivals = std::pin::pin!(arrivals);
+                    while arrivals.next().await.is_some() {
+                        if commands.send(engine::Command::DeviceArrived).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
+            Err(error) => log::warn!("no USB hotplug notifications: {error:#}"),
+        }
+
         let server = std::sync::Arc::new(server::Server { commands, events });
         server::serve(listener, server, shutdown_signal()).await
     });
