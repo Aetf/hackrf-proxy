@@ -6,9 +6,10 @@ Proflame gas fireplace as first-class HA entities with two-way state sync.
 
 ## Where things stand (2026-08-16)
 
-**M1 is done.** The protocol is solved and both directions are proven on real
-hardware: a frame captured from the remote, replayed by the HackRF, ignited the
-fireplace from cold.
+**M1 and M4 are done.** The protocol is solved and both directions are proven
+on real hardware: a frame captured from the remote, replayed by the HackRF,
+ignited the fireplace from cold. The on/off bit has since been captured too, so
+RF can both start and stop the appliance.
 
 What exists:
 
@@ -29,19 +30,19 @@ What exists:
 What does not exist yet: the daemon, its WebSocket protocol, and both Home
 Assistant integrations. See the milestones in `docs/DESIGN.md`.
 
-## Safety: we can ignite but not extinguish
+## Safety: both directions are now reachable
 
-Every frame captured so far encodes the fireplace *on*, so the bit meaning
-"off" is unknown and RF can currently only start the appliance. Stopping it
-depends on the physical remote. **Capturing an off press is the next task**,
-ahead of any other work.
+The off command was captured on 2026-08-16, which retires the asymmetry this
+section used to warn about. `cmd1` bit 0 is on/off, and a verbatim off frame is
+on file, so the fireplace can be both started and stopped by replaying frames
+the remote itself has sent.
 
-The rule followed so far, and worth keeping: replaying a captured frame
-verbatim is safe, because it can only reproduce a state the remote itself just
-asked for. Synthesising a command that has never been observed means guessing
-bits on a gas appliance, and is not something to settle by experiment.
-Thermostat mode deserves particular care, since it makes the appliance cycle on
-its own and will fight Home Assistant.
+The rule that got us here still binds: replaying a captured frame verbatim is
+safe, because it can only reproduce a state the remote just asked for.
+Synthesising a command that has never been observed means guessing bits on a
+gas appliance, and is not something to settle by experiment. Thermostat mode
+deserves particular care whenever it is mapped, since it makes the appliance
+cycle on its own and will fight Home Assistant.
 
 ## Running it
 
@@ -64,8 +65,7 @@ that cost real time here.
 
 ## Next
 
-1. Capture the off command, for the safety reason above.
-2. Map the remaining fields with controlled captures: one button per capture,
+1. Map the remaining fields with controlled captures: one button per capture,
    compare against a known state. Fan, accent light, aux, thermostat.
 3. ~~M4: port the protocol to Rust with `tests/` as regression data.~~ Done
    (2026-08-16): `proxyd/src/proflame.rs`, both directions, checked against

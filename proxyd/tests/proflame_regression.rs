@@ -62,7 +62,6 @@ fn decode_capture(name: &str) -> Vec<(Frame, Keys)> {
             "{name}: wrong identity fields"
         );
         assert_eq!(*keys, Keys { k1: 0x0a, k2: 0x86 }, "{name}: keys must be constant");
-        assert_eq!(frame.cmd1, 0x01, "{name}: neither captured button changed cmd1");
     }
     clean
 }
@@ -72,6 +71,7 @@ fn flame_up_capture_steps_the_level_up() {
     let clean = decode_capture("frames/flame_up.timings.json");
     let levels: BTreeSet<u8> = clean.iter().map(|(f, _)| f.cmd2).collect();
     assert_eq!(levels, BTreeSet::from([0x32, 0x33, 0x34]));
+    assert!(clean.iter().all(|(f, _)| f.cmd1 == 0x01), "the flame buttons never left it on");
 }
 
 #[test]
@@ -79,6 +79,29 @@ fn flame_down_capture_steps_the_level_down() {
     let clean = decode_capture("frames/flame_down.timings.json");
     let levels: BTreeSet<u8> = clean.iter().map(|(f, _)| f.cmd2).collect();
     assert_eq!(levels, BTreeSet::from([0x33, 0x34, 0x35]));
+    assert!(clean.iter().all(|(f, _)| f.cmd1 == 0x01), "the flame buttons never left it on");
+}
+
+/// The capture that resolved the safety asymmetry: pressing on and off with
+/// nothing else touched moved exactly one bit, `cmd1` bit 0.
+///
+/// The flame level rides along unchanged at `cmd2 = 0x36` through both
+/// states, so off is not "level zero" — the appliance remembers the level it
+/// was at. Anything that wants to turn the fireplace off at a *different*
+/// level would be synthesising an unobserved frame, which the project rules
+/// out; see docs/PROTOCOL.md.
+#[test]
+fn power_capture_isolates_the_on_off_bit() {
+    let clean = decode_capture("frames/power_on_off.timings.json");
+
+    assert_eq!(clean.len(), 25, "every frame of the press sequence decoded");
+    assert!(
+        clean.iter().all(|(f, _)| f.cmd2 == 0x36),
+        "the flame level survives being switched off"
+    );
+
+    let states: BTreeSet<u8> = clean.iter().map(|(f, _)| f.cmd1).collect();
+    assert_eq!(states, BTreeSet::from([0x00, 0x01]), "on/off is the only field that moved");
 }
 
 /// Re-encoding a captured frame and decoding it again must reproduce the
@@ -86,7 +109,11 @@ fn flame_down_capture_steps_the_level_down() {
 /// what the remote sent.
 #[test]
 fn captured_frames_survive_reencoding() {
-    for name in ["frames/flame_up.timings.json", "frames/flame_down.timings.json"] {
+    for name in [
+        "frames/flame_up.timings.json",
+        "frames/flame_down.timings.json",
+        "frames/power_on_off.timings.json",
+    ] {
         for (frame, keys) in decode_capture(name) {
             let round_trip = proflame::decode(&frame.to_timings(keys));
             assert_eq!(round_trip.frame(), Some(frame));
