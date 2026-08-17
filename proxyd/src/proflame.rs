@@ -135,6 +135,128 @@ impl Frame {
 /// data[8] + start-of-frame + parity + stop.
 const BITS_PER_BLOCK: usize = 11;
 
+/// The appliance state a frame carries, unpacked from `cmd1` and `cmd2`.
+///
+/// The layout comes from [smartfire], an independent Proflame 2 reverse
+/// engineering effort, and every field it names is corroborated by our own
+/// captures where we have them: the power bit, the flame level and the
+/// thermostat bit each moved exactly when the corresponding button was
+/// pressed and never otherwise. The rest are its claims, not ours, and are
+/// marked in docs/MAPPING.md as unverified until a controlled capture says so.
+///
+/// Between them the two command bytes are fully accounted for, which is what
+/// makes a complete verification possible rather than an open-ended hunt for
+/// buttons: 1 + 3 + 2 + 1 + 1 bits here, 1 + 3 + 1 + 3 there.
+///
+/// [smartfire]: https://github.com/johnellinwood/smartfire
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct State {
+    /// Continuous pilot. Unverified.
+    pub pilot: bool,
+    /// Accent light, 0..=6. Unverified.
+    pub light: u8,
+    /// Bits 3..2 of `cmd1`, which the layout says are unused. Kept so that a
+    /// frame where they are *not* zero is visible rather than silently
+    /// discarded — that would mean the layout is wrong.
+    pub reserved: u8,
+    /// Thermostat ("smart") mode.
+    pub thermostat: bool,
+    /// Main power. Confirmed by a controlled capture.
+    pub power: bool,
+    /// Front flame / flame split. Unverified.
+    pub front: bool,
+    /// Blower, 0..=6. Unverified.
+    pub fan: u8,
+    /// Auxiliary power outlet. Unverified.
+    pub aux: bool,
+    /// Main flame, 0..=6. Confirmed by controlled captures.
+    pub flame: u8,
+}
+
+impl State {
+    pub fn from_commands(cmd1: u8, cmd2: u8) -> Self {
+        Self {
+            pilot: cmd1 & 0x80 != 0,
+            light: (cmd1 >> 4) & 0x07,
+            reserved: (cmd1 >> 2) & 0x03,
+            thermostat: cmd1 & 0x02 != 0,
+            power: cmd1 & 0x01 != 0,
+            front: cmd2 & 0x80 != 0,
+            fan: (cmd2 >> 4) & 0x07,
+            aux: cmd2 & 0x08 != 0,
+            flame: cmd2 & 0x07,
+        }
+    }
+
+    /// Repack into the two command bytes.
+    pub fn to_commands(self) -> (u8, u8) {
+        let cmd1 = (u8::from(self.pilot) << 7)
+            | ((self.light & 0x07) << 4)
+            | ((self.reserved & 0x03) << 2)
+            | (u8::from(self.thermostat) << 1)
+            | u8::from(self.power);
+        let cmd2 = (u8::from(self.front) << 7)
+            | ((self.fan & 0x07) << 4)
+            | (u8::from(self.aux) << 3)
+            | (self.flame & 0x07);
+        (cmd1, cmd2)
+    }
+
+    /// Names of the fields that differ, for spotting what a button changed.
+    pub fn differences(&self, other: &Self) -> Vec<&'static str> {
+        let mut changed = Vec::new();
+        let checks: [(&'static str, bool); 9] = [
+            ("pilot", self.pilot != other.pilot),
+            ("light", self.light != other.light),
+            ("reserved", self.reserved != other.reserved),
+            ("thermostat", self.thermostat != other.thermostat),
+            ("power", self.power != other.power),
+            ("front", self.front != other.front),
+            ("fan", self.fan != other.fan),
+            ("aux", self.aux != other.aux),
+            ("flame", self.flame != other.flame),
+        ];
+        for (name, differs) in checks {
+            if differs {
+                changed.push(name);
+            }
+        }
+        changed
+    }
+}
+
+impl fmt::Display for State {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "power={} flame={} fan={} light={} thermostat={} aux={} front={} pilot={}",
+            u8::from(self.power),
+            self.flame,
+            self.fan,
+            self.light,
+            u8::from(self.thermostat),
+            u8::from(self.aux),
+            u8::from(self.front),
+            u8::from(self.pilot)
+        )?;
+        if self.reserved != 0 {
+            write!(
+                f,
+                "  reserved={:02b} (expected 0 — the field layout may be wrong)",
+                self.reserved
+            )?;
+        }
+        Ok(())
+    }
+}
+
+impl Frame {
+    /// The appliance state this frame commands.
+    pub fn state(&self) -> State {
+        State::from_commands(self.cmd1, self.cmd2)
+    }
+}
+
 /// A framing rule violated while decoding one burst.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Problem {
@@ -379,6 +501,44 @@ mod tests {
         let decoded = decode(&[]);
         assert!(!decoded.is_clean());
         assert_eq!(decoded.blocks.len(), 0);
+    }
+
+    /// The field layout has to explain what we actually watched happen, or it
+    /// is the wrong layout. Each of these is a button press we observed.
+    #[test]
+    fn the_field_layout_explains_every_observed_button_press() {
+        let on = State::from_commands(0x01, 0x36);
+        let off = State::from_commands(0x00, 0x36);
+        assert_eq!(on.differences(&off), vec!["power"], "the power button moved only power");
+
+        let flame_low = State::from_commands(0x01, 0x32);
+        let flame_high = State::from_commands(0x01, 0x34);
+        assert_eq!(flame_low.differences(&flame_high), vec!["flame"]);
+        assert_eq!((flame_low.flame, flame_high.flame), (2, 4));
+
+        let manual = State::from_commands(0x01, 0x31);
+        let smart = State::from_commands(0x03, 0x31);
+        assert_eq!(manual.differences(&smart), vec!["thermostat"]);
+    }
+
+    #[test]
+    fn state_survives_a_round_trip_through_the_command_bytes() {
+        for cmd1 in 0..=u8::MAX {
+            for cmd2 in [0x00u8, 0x31, 0x36, 0x80, 0xFF] {
+                let state = State::from_commands(cmd1, cmd2);
+                assert_eq!(state.to_commands(), (cmd1, cmd2), "0x{cmd1:02x} 0x{cmd2:02x}");
+            }
+        }
+    }
+
+    #[test]
+    fn the_reserved_bits_are_zero_in_every_frame_we_have_seen() {
+        // If these ever come back non-zero the layout is wrong, so the
+        // decoder surfaces them rather than masking them away.
+        for cmd1 in [0x00u8, 0x01, 0x03] {
+            assert_eq!(State::from_commands(cmd1, 0x36).reserved, 0);
+        }
+        assert_eq!(State::from_commands(0b0000_1100, 0).reserved, 0b11);
     }
 
     #[test]

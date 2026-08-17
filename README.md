@@ -24,6 +24,8 @@ What exists:
   Everything but `radio.rs` is tested without hardware, the arbiter included.
   See `proxyd/README.md` for the wire protocol.
 - `docs/PROTOCOL.md` — the Proflame protocol, solved and verified.
+- `docs/MAPPING.md` — how to confirm the remaining command fields, and why
+  that procedure cannot miss one.
 - `docs/DESIGN.md` — architecture, host selection, milestones.
 - `tools/` — `wsprobe.py` (dependency-free WebSocket client for the daemon),
   `decode_proflame.py` (reference decoder) and `analyze_cmd_csv.py`

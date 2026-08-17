@@ -657,12 +657,31 @@ fn report(bursts: &[Vec<i64>]) -> bool {
     println!("{} distinct frame value(s):", distinct.len());
     let mut by_count: Vec<_> = distinct.into_iter().collect();
     by_count.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
-    for (blocks, count) in by_count {
+    for (blocks, count) in &by_count {
         print!("  ");
         for (name, value) in proflame::FIELD_NAMES.iter().zip(blocks) {
             print!(" {name}=0x{value:02x}");
         }
         println!("   x{count}");
+    }
+
+    // The appliance state each distinct frame commands, and — the thing that
+    // actually maps a button — what changed between consecutive ones.
+    println!("\nappliance state:");
+    let mut previous: Option<proflame::State> = None;
+    let mut in_air_order: Vec<_> = by_count.iter().collect();
+    in_air_order.sort_by_key(|(blocks, _)| (blocks[3], blocks[4]));
+    for (blocks, count) in in_air_order {
+        let state = proflame::State::from_commands(blocks[3], blocks[4]);
+        print!("  {state}   x{count}");
+        if let Some(previous) = previous {
+            let changed = state.differences(&previous);
+            if !changed.is_empty() {
+                print!("   <- changed: {}", changed.join(", "));
+            }
+        }
+        println!();
+        previous = Some(state);
     }
 
     let k1: std::collections::BTreeSet<u8> = clean.iter().map(|(_, k)| k.k1).collect();
