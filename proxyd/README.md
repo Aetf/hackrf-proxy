@@ -54,6 +54,20 @@ Captures are written to `./captures` on the host (override with
   re-enumerates — on re-plug, and after a device reset — and a stale `--device`
   path fails in a way that looks like missing hardware.
 
+## Running it on another machine
+
+The release binary is a static-pie musl executable with no shared libraries, so
+moving the radio to a better listening post costs one copy and no toolchain:
+
+    podman create --name hrfx hackrf-proxyd
+    podman cp hrfx:/usr/local/bin/hrf ~/.local/bin/hrf   # or scp to the target
+    podman rm hrfx
+
+On a laptop with an active local session the distro's `uaccess` rule is enough
+on its own, which is why the same package that grants nothing on a headless
+server works there without further setup. Check with `loginctl list-sessions`:
+a row with a real seat (`seat0`) rather than `-` means the ACL will be granted.
+
 ## One-time device access
 
 Required for both the container and the native binary; the rule install needs
