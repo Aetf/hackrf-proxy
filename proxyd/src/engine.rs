@@ -120,10 +120,12 @@ pub fn run<T: Transceiver>(
     let mut buffer = Vec::new();
 
     loop {
-        // While receiving, look for work between transfers rather than
-        // waiting for it: that is what lets a transmission preempt, and it
-        // bounds the preemption delay at one transfer.
-        let command = if state.receiving() || state.faulted {
+        // With the receiver wanted, look for work between transfers rather
+        // than waiting for it: that is what lets a transmission preempt, and
+        // it bounds the preemption delay at one transfer. With the receiver
+        // off there is nothing to do until a request arrives, faulted or not,
+        // so block rather than spin on a radio nobody is asking for.
+        let command = if state.rx_enabled {
             match commands.try_recv() {
                 Ok(command) => Some(command),
                 Err(mpsc::error::TryRecvError::Empty) => None,
@@ -141,7 +143,9 @@ pub fn run<T: Transceiver>(
         }
 
         if state.faulted {
-            state.retry(&mut device, &events);
+            if state.rx_enabled {
+                state.retry(&mut device, &events);
+            }
             continue;
         }
         if state.receiving() {
@@ -244,6 +248,9 @@ impl State {
                     self.rx_running = false;
                 }
                 *detector = ook::Detector::new(self.config.detector);
+                // A retune is also a chance to recover: clear the fault and
+                // let the next pump try the radio, rather than making a client
+                // wait out the backoff it happens to have landed in.
                 self.faulted = false;
                 self.publish(events);
                 let _ = reply.send(Ok(()));
@@ -304,7 +311,13 @@ impl State {
         result?;
 
         self.counters.transmissions += 1;
-        self.publish(events);
+        // With the receiver wanted, say nothing here: the next loop iteration
+        // restarts it and announces "receiving". Publishing the momentary
+        // "idle" in between would have a client tracking availability flap
+        // once per transmission.
+        if !self.rx_enabled {
+            self.publish(events);
+        }
         Ok(request.air_time_us())
     }
 
@@ -666,6 +679,38 @@ mod tests {
             .filter(|m| matches!(m.payload, wire::MessagePayload::DeviceState { .. }))
             .count();
         assert_eq!(repeats, 0, "steady state must not be re-announced every transfer");
+    }
+
+    #[test]
+    fn a_transmission_does_not_flap_availability_through_idle() {
+        // A client tracking availability off device_state should see the radio
+        // go busy and come back, not blink through "idle" every time.
+        let mut harness = Harness::start(config(), FakeRadio::default());
+        assert_eq!(
+            harness.wait_for(|m| match &m.payload {
+                wire::MessagePayload::DeviceState { state } => Some(*state),
+                _ => None,
+            }),
+            Some(wire::DeviceState::Receiving)
+        );
+
+        harness.transmit(a_frame()).unwrap();
+
+        let mut seen = Vec::new();
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline && !seen.ends_with(&[wire::DeviceState::Receiving]) {
+            if let Ok(message) = harness.events.try_recv() {
+                if let wire::MessagePayload::DeviceState { state } = message.payload {
+                    seen.push(state);
+                }
+            }
+        }
+
+        assert_eq!(
+            seen,
+            vec![wire::DeviceState::Transmitting, wire::DeviceState::Receiving],
+            "expected busy then back, with no idle in between"
+        );
     }
 
     #[test]
