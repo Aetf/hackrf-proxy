@@ -46,6 +46,22 @@ fn cmd_csv_checksums_all_reproduce() {
     assert_eq!(keys_by_remote.len(), 5, "the table spans five remotes");
 }
 
+/// Bursts from a `serve --record` file, one JSON object per line.
+fn recorded_frames(name: &str) -> Vec<Vec<i64>> {
+    data(name)
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            serde_json::from_str::<serde_json::Value>(line).unwrap()["timings"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|t| t.as_i64().unwrap())
+                .collect()
+        })
+        .collect()
+}
+
 fn decode_capture(name: &str) -> Vec<(Frame, Keys)> {
     let bursts: Vec<Vec<i64>> = serde_json::from_str(&data(name)).unwrap();
     let clean: Vec<_> = bursts
@@ -115,18 +131,7 @@ fn power_capture_isolates_the_on_off_bit() {
 /// Home Assistant if M5 treats received frames as user intent.
 #[test]
 fn thermostat_mode_frames_decode_and_carry_a_new_command_byte() {
-    let bursts: Vec<Vec<i64>> = data("frames/smart_mode.frames.jsonl")
-        .lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| {
-            serde_json::from_str::<serde_json::Value>(line).unwrap()["timings"]
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|t| t.as_i64().unwrap())
-                .collect()
-        })
-        .collect();
+    let bursts = recorded_frames("frames/smart_mode.frames.jsonl");
     assert_eq!(bursts.len(), 10);
 
     let clean: Vec<_> = bursts
@@ -143,6 +148,60 @@ fn thermostat_mode_frames_decode_and_carry_a_new_command_byte() {
 
     let levels: BTreeSet<u8> = clean.iter().map(|(f, _)| f.cmd2).collect();
     assert_eq!(levels, BTreeSet::from([0x30, 0x31]), "the remote stepped the flame down itself");
+}
+
+/// Steps 2 and 4 of docs/MAPPING.md, in one session: the handset was switched
+/// to manual mode and then the blower stepped up one level at a time.
+///
+/// This is what confirms two of smartfire's field labels on our own hardware.
+/// The blower sweep moves `fan` and nothing else through 1…6 — which also
+/// settles why every earlier capture read `fan = 3`: the blower really was
+/// sitting at level 3. And the manual-mode frames carry `thermostat = 0`
+/// where the smart-mode ones carried 1, with the flame no longer drifting on
+/// its own, which is the isolation the earlier capture could not provide.
+#[test]
+fn the_fan_sweep_confirms_the_blower_and_thermostat_fields() {
+    let frames = recorded_frames("frames/manual_fan_sweep.frames.jsonl");
+    let states: Vec<proflame::State> = frames
+        .iter()
+        .map(|b| proflame::decode(b))
+        .filter_map(|d| Some(d.frame()?.state()))
+        .collect();
+
+    // 73 of 80. The rest arrived late in the session at a weaker level — the
+    // recorded peak falls to 159 where the rest saturate — and at that level
+    // the inter-frame gap stops being distinguishable, so pairs of frames
+    // merge into one eight-block burst that cannot decode.
+    //
+    // Asserted rather than waved away, because it is the honest reception
+    // rate at this range. It costs nothing here: the remote sends five
+    // identical frames per state, so a lost frame is not a lost state, and
+    // every step of the sweep below is present.
+    assert_eq!(states.len(), 73, "corrupted frames are expected at the weak end");
+    assert_eq!(frames.len(), 80);
+
+    // Distinct states, in the order first heard.
+    let mut sequence: Vec<proflame::State> = Vec::new();
+    for state in states {
+        if sequence.last() != Some(&state) {
+            sequence.push(state);
+        }
+    }
+
+    let manual: Vec<_> = sequence.iter().filter(|s| !s.thermostat).collect();
+    assert_eq!(
+        manual.iter().map(|s| s.fan).collect::<Vec<_>>(),
+        vec![1, 2, 3, 4, 5, 6, 5, 4, 3, 2, 1],
+        "the blower stepped one level at a time, up and back down"
+    );
+    for pair in manual.windows(2) {
+        assert_eq!(pair[1].differences(pair[0]), vec!["fan"], "and moved nothing else");
+    }
+    assert!(manual.iter().all(|s| s.flame == 4), "the flame held still in manual mode");
+    assert!(
+        sequence.iter().any(|s| s.thermostat),
+        "the session also contains the smart-mode frames it started from"
+    );
 }
 
 /// Re-encoding a captured frame and decoding it again must reproduce the

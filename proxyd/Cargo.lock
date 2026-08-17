@@ -373,6 +373,7 @@ dependencies = [
  "env_logger",
  "futures-util",
  "log",
+ "nusb",
  "seify-hackrfone",
  "serde",
  "serde_json",

@@ -650,12 +650,13 @@ fn report(bursts: &[Vec<i64>]) -> bool {
         bursts.len()
     );
 
+    // Distinct values by frequency, for spotting the odd one out.
     let mut distinct: BTreeMap<[u8; proflame::FRAME_BLOCKS], usize> = BTreeMap::new();
     for (frame, keys) in &clean {
         *distinct.entry(frame.blocks(*keys)).or_default() += 1;
     }
     println!("{} distinct frame value(s):", distinct.len());
-    let mut by_count: Vec<_> = distinct.into_iter().collect();
+    let mut by_count: Vec<_> = distinct.iter().map(|(b, c)| (*b, *c)).collect();
     by_count.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
     for (blocks, count) in &by_count {
         print!("  ");
@@ -665,14 +666,27 @@ fn report(bursts: &[Vec<i64>]) -> bool {
         println!("   x{count}");
     }
 
-    // The appliance state each distinct frame commands, and — the thing that
-    // actually maps a button — what changed between consecutive ones.
-    println!("\nappliance state:");
+    // The appliance state over time, and — the thing that actually maps a
+    // button — what changed at each step.
+    //
+    // In time order with consecutive repeats collapsed, rather than a set of
+    // distinct values. A sweep that goes up and then back down revisits states
+    // it has already been in, and "distinct values" silently discards the
+    // whole return leg; the diffs also have to be against the state that
+    // really preceded this one, or they read like transitions that never
+    // happened.
+    println!("\nappliance state over time (repeats collapsed):");
     let mut previous: Option<proflame::State> = None;
-    let mut in_air_order: Vec<_> = by_count.iter().collect();
-    in_air_order.sort_by_key(|(blocks, _)| (blocks[3], blocks[4]));
-    for (blocks, count) in in_air_order {
-        let state = proflame::State::from_commands(blocks[3], blocks[4]);
+
+    let mut timeline: Vec<(proflame::State, usize)> = Vec::new();
+    for (frame, _) in &clean {
+        let state = frame.state();
+        match timeline.last_mut() {
+            Some((last, count)) if *last == state => *count += 1,
+            _ => timeline.push((state, 1)),
+        }
+    }
+    for (state, count) in &timeline {
         print!("  {state}   x{count}");
         if let Some(previous) = previous {
             let changed = state.differences(&previous);
@@ -681,7 +695,7 @@ fn report(bursts: &[Vec<i64>]) -> bool {
             }
         }
         println!();
-        previous = Some(state);
+        previous = Some(*state);
     }
 
     let k1: std::collections::BTreeSet<u8> = clean.iter().map(|(_, k)| k.k1).collect();
