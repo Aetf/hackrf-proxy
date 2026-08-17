@@ -9,7 +9,11 @@ Proflame gas fireplace as first-class HA entities with two-way state sync.
 **M1, M2 and M4 are done.** The protocol is solved and both directions are
 proven on real hardware: a frame captured from the remote, replayed by the
 HackRF, ignited the fireplace from cold. The on/off bit has since been captured
-too, so RF can both start and stop the appliance. The daemon exists and runs.
+too, so RF can both start and stop the appliance. The daemon exists, runs, and
+has been exercised against the real radio over the network — receiving for
+hours, retuning, transmitting and handing the radio back, and recovering from
+several hundred real USB faults without help. The one thing still unconfirmed
+is a received *frame*, which needs the remote pressed while it listens.
 
 What exists:
 

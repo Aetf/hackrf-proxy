@@ -76,6 +76,43 @@ Two things a client has to get right:
 `transmit` replies when the air time is over, not when the request is queued,
 so a client knows the transmission actually happened.
 
+### Verified on the real radio (2026-08-17, XPS)
+
+Everything the daemon does has now run against a HackRF One, over the network:
+the receiver streams continuously for hours and learns its threshold from live
+315 MHz noise (54–55 here, and 16 on 433.92 MHz — independently rediscovering
+that this site's 315 MHz floor is the noisier of the two); retuning between the
+two bands works; a transmission preempts and hands the radio back with the
+receiver demonstrably streaming again afterwards; SIGTERM shuts down cleanly.
+Continuous receive costs about 4% of one core and 6 MB.
+
+Two results worth keeping. Over ninety minutes of live 315 MHz ambient noise the
+detector produced **zero spurious frames and zero burst overflows** — that was
+the exact failure mode of the first threshold design, and it does not reproduce
+on real signal. And the fault machinery earned its keep: 435 real USB faults,
+435 recoveries, no manual intervention.
+
+**Not yet verified: an actual received frame.** That needs somebody to press the
+fireplace remote while the daemon is listening.
+
+### USB autosuspend will bite you
+
+The HackRF must not be autosuspended. It is a known problem with this device,
+and for a daemon that streams continuously it is worse than the usual symptom:
+a suspended radio fails its next bulk transfer, while still answering control
+transfers, so a naive recovery check restarts straight back into the failure.
+
+`deploy/60-hackrf-access.rules` disables the autosuspend timer. **On a laptop
+running TLP that is not enough** — TLP applies its own USB policy afterwards and
+will turn it back on:
+
+    # /etc/tlp.d/10-hackrf.conf
+    USB_DENYLIST="1d50:6089"
+
+then `systemctl restart tlp`. Check with:
+
+    cat /sys/bus/usb/devices/*/power/control     # want "on" for the HackRF
+
 ### What it refuses
 
 Requests the wire layer can judge are refused without troubling the radio: an
@@ -87,9 +124,14 @@ transmission is a long deafness for every other client.
 ### Behaviour worth knowing
 
 - **A missing or failing radio does not stop the daemon.** It serves in a
-  `faulted` state, reports the reason on every request, and keeps retrying. A
-  USB re-enumeration permanently kills the old handle, so the device is dropped
-  and reopened rather than retried on a dead one.
+  `faulted` state, reports the reason on every request, and keeps retrying with
+  a backoff that doubles to a minute. A USB re-enumeration permanently kills the
+  old handle, so the device is dropped and reopened rather than retried on a
+  dead one.
+- **Recovery is only believed once a transfer arrives.** A HackRF whose bulk
+  streaming is broken still answers control transfers, so "it identified
+  itself" is not evidence that it works. Getting this wrong produced 435 faults
+  in four hours on the XPS, 408 of them spaced at exactly the retry interval.
 - **The receiver needs one window (a second by default) to learn the band**
   before it can slice it, so nothing is detected in the first second.
 - **A slow client loses events rather than slowing the radio down.** Falling
