@@ -2,3 +2,4 @@ target/
 *.iq
 *.cs8
 captures/
+__pycache__/
