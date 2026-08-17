@@ -108,6 +108,10 @@ enum Command {
         /// Write the selected burst as a Flipper-RAW timings JSON array.
         #[arg(long)]
         out: Option<PathBuf>,
+        /// Write every burst as a JSON array of timing arrays, for protocol
+        /// analysis across repeats.
+        #[arg(long, value_name = "FILE")]
+        out_all: Option<PathBuf>,
     },
 
     /// Transmit OOK from a Flipper-RAW timings JSON array.
@@ -205,7 +209,9 @@ fn main() -> Result<()> {
             },
             &out,
         ),
-        Command::Demod { r#in, rate, threshold, min_us, gap_us, min_edges, bucket_us, burst, out } => {
+        Command::Demod {
+            r#in, rate, threshold, min_us, gap_us, min_edges, bucket_us, burst, out, out_all
+        } => {
             demod(DemodArgs {
                 input: &r#in,
                 sample_rate: rate,
@@ -216,6 +222,7 @@ fn main() -> Result<()> {
                 bucket_us,
                 burst,
                 out: out.as_deref(),
+                out_all: out_all.as_deref(),
             })
         }
         Command::Transmit { freq, rate, txvga, amp, repeat, gap_us, file } => {
@@ -242,6 +249,7 @@ struct DemodArgs<'a> {
     bucket_us: i64,
     burst: usize,
     out: Option<&'a Path>,
+    out_all: Option<&'a Path>,
 }
 
 fn demod(args: DemodArgs<'_>) -> Result<()> {
@@ -307,6 +315,12 @@ fn demod(args: DemodArgs<'_>) -> Result<()> {
         println!("  {bucket:>7} : {count:>4}  {}", "#".repeat(count.min(60)));
     }
 
+    if let Some(path) = args.out_all {
+        let mut file = BufWriter::new(File::create(path)?);
+        serde_json::to_writer(&mut file, &bursts)?;
+        file.flush()?;
+        println!("\nwrote all {} bursts to {}", bursts.len(), path.display());
+    }
     if let Some(path) = args.out {
         let mut file = BufWriter::new(File::create(path)?);
         serde_json::to_writer(&mut file, selected)?;
