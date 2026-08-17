@@ -23,7 +23,8 @@ What exists:
   bench tools — `info`, `scan`, `capture`, `demod`, `decode`, `transmit`.
   Everything but `radio.rs` is tested without hardware, the arbiter included.
   See `proxyd/README.md` for the wire protocol.
-- `docs/PROTOCOL.md` — the Proflame protocol, solved and verified.
+- `docs/PROTOCOL.md` — the Proflame protocol, solved: framing, checksums and
+  every command field.
 - `docs/MAPPING.md` — how to confirm the remaining command fields, and why
   that procedure cannot miss one.
 - `docs/DESIGN.md` — architecture, host selection, milestones.
@@ -86,14 +87,18 @@ udev and rootless-podman traps that cost real time here.
 2. **M4's consumer half: the `proflame` integration.** The protocol is already
    ported and tested; what is missing is the HA side — config flow with a
    transmitter picker, and the entities.
-3. Map the remaining fields with controlled captures: one button per capture,
-   compare against a known state. Fan, accent light, aux; and confirm the
-   thermostat bit, which so far is only a correlation. Use
-   `hrf serve --record` for these — it survives restarts and disconnects.
+3. ~~Map the remaining command fields.~~ Done (2026-08-17): six confirmed by
+   controlled captures, two unreachable on this appliance. See
+   `docs/MAPPING.md`.
 4. Decide where the radio finally lives. The garage cannot hear the fireplace;
    candidates are a small host in the living room or an ESP32-C6 with a CC1101
    beside the fireplace, which would be a native HA transmitter needing no
    daemon at all.
 
 Done: M1 (protocol solved, replay ignites), M4's Rust half (`proflame.rs`,
-pinned by regression tests), M2 (the daemon).
+pinned by regression tests), M2 (the daemon), and the command-field mapping.
+
+The one thing to know before writing the integrations: **the appliance is
+stateless and the handset holds the state**, so Home Assistant and the handset
+are two state holders that cannot hear each other. `docs/PROTOCOL.md` explains
+what that costs.
