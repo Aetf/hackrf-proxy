@@ -35,17 +35,19 @@ enum Command {
     /// looks identical whether the frequency is wrong, the remote is out of
     /// range, or the button was pressed outside the window.
     Scan {
-        /// Comma-separated frequencies in Hz. Defaults to the FCC and CE
-        /// Proflame bands plus their neighbours.
-        #[arg(long, default_value = "315000000,318000000,390000000,433920000")]
+        /// Comma-separated frequencies, e.g. `315M,433.92M`. Defaults to the
+        /// FCC and CE Proflame bands plus their neighbours.
+        #[arg(long, default_value = "315M,318M,390M,433.92M")]
         freqs: String,
         #[arg(long, default_value_t = 2_000_000)]
         rate: u32,
-        #[arg(long, default_value_t = 40)]
+        #[arg(long, default_value_t = 24)]
         lna: u16,
-        #[arg(long, default_value_t = 40)]
+        #[arg(long, default_value_t = 20)]
         vga: u16,
-        /// Enable the front-end RX amplifier (+14 dB). Worth it when hunting.
+        /// Enable the front-end RX amplifier (+14 dB). Only for distant
+        /// signals: near a transmitter it saturates the front end and every
+        /// band reads full scale, which measures nothing.
         #[arg(long)]
         amp: bool,
         /// Seconds to listen on each frequency before moving on.
@@ -57,7 +59,7 @@ enum Command {
 
     /// Receive raw IQ to a cs8 file.
     Capture {
-        #[arg(long, default_value_t = 315_000_000)]
+        #[arg(long, default_value = "315M", value_parser = parse_frequency)]
         freq: u64,
         #[arg(long, default_value_t = 2_000_000)]
         rate: u32,
@@ -110,7 +112,7 @@ enum Command {
 
     /// Transmit OOK from a Flipper-RAW timings JSON array.
     Transmit {
-        #[arg(long, default_value_t = 315_000_000)]
+        #[arg(long, default_value = "315M", value_parser = parse_frequency)]
         freq: u64,
         #[arg(long, default_value_t = 2_000_000)]
         rate: u32,
@@ -132,6 +134,45 @@ enum Command {
     },
 }
 
+/// HackRF One tunes from 1 MHz to 6 GHz.
+const MIN_FREQUENCY_HZ: u64 = 1_000_000;
+const MAX_FREQUENCY_HZ: u64 = 6_000_000_000;
+
+/// Parse a frequency, accepting `315M`, `433.92MHz`, `315000000` and friends.
+///
+/// Bare numbers are hertz, which makes `--freq 315` mean 315 Hz — a mistake
+/// that is easy to make and, without this check, produces a capture of noise
+/// from a radio tuned nowhere near the intended band.
+fn parse_frequency(input: &str) -> Result<u64> {
+    let text = input.trim().to_ascii_lowercase();
+    let text = text.strip_suffix("hz").unwrap_or(&text).trim();
+    let (digits, multiplier) = match text.strip_suffix('g') {
+        Some(rest) => (rest, 1e9),
+        None => match text.strip_suffix('m') {
+            Some(rest) => (rest, 1e6),
+            None => match text.strip_suffix('k') {
+                Some(rest) => (rest, 1e3),
+                None => (text, 1.0),
+            },
+        },
+    };
+    let value: f64 = digits
+        .trim()
+        .parse()
+        .with_context(|| format!("not a frequency: {input}"))?;
+    ensure!(value.is_finite() && value > 0.0, "not a frequency: {input}");
+    let hz = (value * multiplier).round() as u64;
+
+    if hz < MIN_FREQUENCY_HZ {
+        anyhow::bail!(
+            "{input} is {hz} Hz, below the HackRF's 1 MHz minimum — \
+             bare numbers are hertz, so write {digits}M for megahertz"
+        );
+    }
+    ensure!(hz <= MAX_FREQUENCY_HZ, "{input} is above the HackRF's 6 GHz maximum");
+    Ok(hz)
+}
+
 fn main() -> Result<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
@@ -140,9 +181,9 @@ fn main() -> Result<()> {
         Command::Scan { freqs, rate, lna, vga, amp, dwell, passes } => {
             let frequencies = freqs
                 .split(',')
-                .map(|f| f.trim().parse::<u64>())
-                .collect::<Result<Vec<_>, _>>()
-                .context("--freqs must be comma-separated frequencies in Hz")?;
+                .map(parse_frequency)
+                .collect::<Result<Vec<_>>>()
+                .context("--freqs must be a comma-separated frequency list")?;
             radio::scan(&radio::ScanParams {
                 frequencies,
                 sample_rate: rate,

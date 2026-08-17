@@ -17,6 +17,8 @@ const TRANSFER_SIZE: usize = 32_768;
 /// Transfers the driver keeps queued, which is also how much tail can be lost
 /// when a stream is dropped.
 const IN_FLIGHT_TRANSFERS: usize = 3;
+/// |I| + |Q| saturates at 256; treat anything at the top as clipped.
+const SATURATED: u16 = 250;
 
 /// Open the first HackRF, distinguishing "absent" from "present but not
 /// permitted".
@@ -145,7 +147,7 @@ pub fn capture(params: &CaptureParams, out: &Path) -> Result<()> {
                 "  {:>4.1}s  peak {:>3}/256{}",
                 written as f64 / bytes_per_second as f64,
                 interval_peak,
-                if interval_peak >= 250 { "  (clipping — lower the gain)" } else { "" }
+                if interval_peak >= SATURATED { "  (clipping — lower the gain)" } else { "" }
             );
             interval_peak = 0;
             interval_bytes = 0;
@@ -206,6 +208,7 @@ pub fn scan(params: &ScanParams) -> Result<()> {
     }
     println!("\n     {}", "  peak (99.9%)   ".repeat(params.frequencies.len()));
 
+    let mut saturated_bands = 0usize;
     for pass in 1..=params.passes {
         print!("{pass:>4} ");
         for frequency in &params.frequencies {
@@ -221,6 +224,12 @@ pub fn scan(params: &ScanParams) -> Result<()> {
                 collected += chunk.len();
             }
             let levels = histogram.levels(0.5);
+            // A band whose 99.9th percentile is already at full scale is not
+            // "strong", it is overloaded: the front end is clipping almost all
+            // the time and nothing can be distinguished within it.
+            if levels.signal >= SATURATED {
+                saturated_bands += 1;
+            }
             print!("{:>18}", format!("{:>3} ({:>3})", histogram.peak(), levels.signal));
         }
         println!();
@@ -229,11 +238,20 @@ pub fn scan(params: &ScanParams) -> Result<()> {
     }
 
     drop(stream);
-    println!(
-        "\nBaseline noise on an idle band sits near peak 110. A transmitting remote a few\n\
-         centimetres from the antenna should saturate towards 250; anything that does not\n\
-         clearly rise above the other frequencies is not the one being used."
-    );
+    if saturated_bands > 0 {
+        println!(
+            "\nSaturated: the 99.9th percentile reached full scale, so the front end is\n\
+             clipping and these readings cannot be compared. Drop --amp first, then lower\n\
+             --lna (steps of 8) and --vga (steps of 2) until the quiet bands fall back to\n\
+             double digits. Only then does a band standing out mean anything."
+        );
+    } else {
+        println!(
+            "\nA transmitting remote close to the antenna should lift one band far above\n\
+             the others. If nothing moves while a button is held, that band is not the\n\
+             one in use."
+        );
+    }
     Ok(())
 }
 
