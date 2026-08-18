@@ -112,25 +112,38 @@ async fn connection(stream: TcpStream, peer: SocketAddr, server: Arc<Server>) ->
         }
     });
 
-    while let Some(received) = source.next().await {
-        let message = received.context("connection failed")?;
-        let text = match message {
-            WsMessage::Text(text) => text.to_string(),
-            WsMessage::Binary(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
-            WsMessage::Ping(_) | WsMessage::Pong(_) | WsMessage::Frame(_) => continue,
-            WsMessage::Close(_) => break,
-        };
+    // The read loop's result is kept and returned *after* the cleanup below,
+    // rather than propagated with `?` from inside it. Returning early would
+    // skip aborting the forwarder, which holds its own sender: the channel
+    // would stay open, the writer would never see it close, and the socket
+    // would sit in CLOSE-WAIT until the next event happened to fail on it.
+    let outcome = async {
+        while let Some(received) = source.next().await {
+            let message = received.context("connection failed")?;
+            let text = match message {
+                WsMessage::Text(text) => text.to_string(),
+                WsMessage::Binary(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+                // tungstenite answers pings itself, and flushes the pong
+                // while reading rather than waiting for something to send —
+                // verified against a two-second client heartbeat on an
+                // otherwise idle connection.
+                WsMessage::Ping(_) | WsMessage::Pong(_) | WsMessage::Frame(_) => continue,
+                WsMessage::Close(_) => break,
+            };
 
-        let reply = dispatch(&text, &server).await;
-        if outbound.send(reply).await.is_err() {
-            break;
+            let reply = dispatch(&text, &server).await;
+            if outbound.send(reply).await.is_err() {
+                break;
+            }
         }
+        Ok(())
     }
+    .await;
 
     drop(outbound);
     forwarder.abort();
     let _ = writer.await;
-    Ok(())
+    outcome
 }
 
 /// Parse one request, run it, and produce the reply to send back.
@@ -345,6 +358,32 @@ mod tests {
         assert_eq!(reply["type"], "transmitted");
         assert_eq!(reply["id"], "7");
         assert_eq!(reply["duration_us"], 811_000);
+    }
+
+    /// A keepalive has to be answered, or a client with a heartbeat drops a
+    /// connection that is perfectly healthy.
+    ///
+    /// tungstenite does this for us, and the guard is here because that is
+    /// easy to break by accident — handling the read side without ever
+    /// flushing the write side would leave the pong queued and unsent. Worth
+    /// pinning precisely because nothing in this file appears to do it.
+    #[tokio::test]
+    async fn a_ping_is_answered_even_with_nothing_else_to_send() {
+        let harness = harness().await;
+        let mut socket = connect(harness.address).await;
+
+        socket.send(WsMessage::Ping(b"keepalive".to_vec().into())).await.unwrap();
+
+        let reply = tokio::time::timeout(std::time::Duration::from_secs(5), socket.next())
+            .await
+            .expect("the daemon should answer a ping promptly")
+            .expect("the connection should stay open")
+            .unwrap();
+
+        assert!(
+            matches!(&reply, WsMessage::Pong(payload) if payload.as_ref() == b"keepalive"),
+            "expected a pong carrying the ping's payload, got {reply:?}"
+        );
     }
 
     #[tokio::test]
