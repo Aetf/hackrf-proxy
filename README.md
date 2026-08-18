@@ -18,10 +18,13 @@ auto-off timer, it follows the handset by decoding what the receiver hears, and
 it re-asserts its state on a timer so the appliance cannot quietly drift away
 from what Home Assistant believes.
 
-What is left is M6 — polish. The transmitter integration has no diagnostic
-entities, so a connection problem is only visible in the log; the daemon is
-unauthenticated on the LAN while being able to transmit, which wants a decision
-before it moves anywhere less trusted; and nothing has been offered upstream.
+Both integrations report on themselves: the fireplace says what the radio has
+and has not managed to send, and the transmitter says what the radio is doing,
+when it last heard anything, and how steady the connection to it has been.
+
+What is left is the end of M6. The daemon is unauthenticated on the LAN while
+being able to transmit, which wants a decision before it moves anywhere less
+trusted, and nothing has been offered upstream.
 
 What exists:
 
@@ -95,18 +98,14 @@ udev and rootless-podman traps that cost real time here.
 
 ## Next
 
-1. **Diagnostics for `hackrf_proxy`.** The fireplace integration can now be
-   asked what the radio has and has not managed to send; the transmitter
-   cannot be asked anything at all, so a connection problem is visible only by
-   reading the log.
-2. **Decide on authentication.** The daemon is unauthenticated on the LAN,
+1. **Decide on authentication.** The daemon is unauthenticated on the LAN,
    which is the same posture as an ESPHome node except that this one can
    *transmit*. Worth settling before it moves to a less trusted network.
-3. **Decide where the radio finally lives.** The garage cannot hear the
+2. **Decide where the radio finally lives.** The garage cannot hear the
    fireplace; candidates are a small host in the living room or an ESP32-C6
    with a CC1101 beside it, which would be a native HA transmitter needing no
    daemon at all.
-4. **Settle the echo question**, which needs a second receiver — the HackRF is
+3. **Settle the echo question**, which needs a second receiver — the HackRF is
    half-duplex and deaf while it transmits, so it cannot hear a reply to its
    own frame. See `docs/PROTOCOL.md`.
 

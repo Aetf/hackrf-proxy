@@ -301,9 +301,11 @@ hackrf-proxy/
      backoff.
    - ~~Diagnostics for `proflame`~~ — done 2026-08-18: whether anything is
      driving the appliance, and what the radio has and has not managed to send.
-   - **Diagnostics for `hackrf_proxy`** — not done. The transmitter cannot be
-     asked anything, so a connection problem is visible only in the log.
-   - **Upstream PRs** — not started.
+   - ~~Diagnostics for `hackrf_proxy`~~ — done 2026-08-18: what the radio is
+     doing, when the receiver last heard anything, how long this connection has
+     lasted and how many previous ones did not, plus the daemon's own counters.
+     Split by what survives an outage, since an outage is when they are read.
+   - **Upstream PRs** — not started, and the last thing left in M6.
 
    The integration's own behaviour is specified separately, in `docs/STATE.md`:
    every event, every edge, and the seven defects that writing them down
