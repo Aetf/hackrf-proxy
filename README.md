@@ -34,8 +34,8 @@ What exists:
 - `tests/` — `cmd.csv` (220 inherited packets, 5 remotes),
   `frames/*.timings.json` (bench captures) and `frames/*.frames.jsonl`
   (recorded by the daemon).
-- `integrations/` — the Home Assistant side. `hackrf_proxy` (the transmitter)
-  exists; `proflame` (the consumer) does not yet.
+- `integrations/` — the Home Assistant side: `hackrf_proxy` (the transmitter)
+  and `proflame` (the fireplace).
 - `deploy/` — Containerfile, quadlet unit, podman wrapper, udev rule.
 
 What does not exist yet: both Home Assistant integrations (M3 and M4's consumer
@@ -83,11 +83,10 @@ udev and rootless-podman traps that cost real time here.
 
 ## Next
 
-1. **M4's consumer half: the `proflame` integration.** The protocol is solved
-   and every command field is mapped; what is missing is the Home Assistant
-   side — a config flow with a transmitter picker, and the entities.
-2. Confirm the `hackrf_proxy` transmitter on air, which needs a Home Assistant
-   restart to load it and one real transmission to prove the path.
+1. Drive the fireplace from Home Assistant end to end, which needs one real
+   transmission to prove the path.
+2. **M5, in the reduced form the hardware allows.** Following the handset
+   already works; the part that cannot work is the handset following us.
 3. ~~Map the remaining command fields.~~ Done (2026-08-17): six confirmed by
    controlled captures, two unreachable on this appliance. See
    `docs/MAPPING.md`.
