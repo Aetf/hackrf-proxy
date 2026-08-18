@@ -61,7 +61,10 @@ class ProxyClient:
         self._next_id = 0
         self._connected = asyncio.Event()
         self._closing = False
+        #: Board and firmware of the radio, once the daemon has reported them.
         self.device: str | None = None
+        #: The daemon's own version.
+        self.daemon_version: str | None = None
 
     def add_availability_listener(
         self, listener: Callable[[bool], None]
@@ -201,6 +204,7 @@ class ProxyClient:
             _LOGGER.debug("%s did not answer a status request", self._url)
             return
         self.device = status.get("device")
+        self.daemon_version = status.get("daemon_version")
         self._set_available(True)
 
         async for message in socket:
