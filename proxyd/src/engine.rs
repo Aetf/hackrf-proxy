@@ -414,6 +414,17 @@ impl State {
         result?;
 
         self.counters.transmissions += 1;
+        // Loud enough to correlate against what the receiver hears afterwards.
+        // Without this, a frame arriving just after a transmission cannot be
+        // told apart from a remote being pressed — which is exactly the
+        // question of whether an appliance echoes what it was told.
+        log::info!(
+            "transmitted {} timings x{} on {:.3} MHz, {} µs of air time",
+            request.timings.len(),
+            request.repeat + 1,
+            request.frequency as f64 / 1e6,
+            request.air_time_us()
+        );
         // With the receiver wanted, say nothing here: the next loop iteration
         // restarts it and announces "receiving". Publishing the momentary
         // "idle" in between would have a client tracking availability flap
