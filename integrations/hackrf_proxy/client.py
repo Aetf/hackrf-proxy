@@ -9,10 +9,13 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 import contextlib
+from datetime import datetime
 import logging
 from typing import Any
 
 import aiohttp
+
+from homeassistant.util import dt as dt_util
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -54,6 +57,11 @@ class ProxyClient:
         self._url = f"ws://{host}:{port}"
         self._on_rx_frame = on_rx_frame
         self._availability_listeners: list[Callable[[bool], None]] = []
+        #: Told about anything the diagnostics show, not only availability.
+        #: The radio moving between idle, receiving and transmitting does not
+        #: change availability at all, so a listener on that alone would show a
+        #: state that only ever updated when something broke.
+        self._update_listeners: list[Callable[[], None]] = []
 
         self._socket: aiohttp.ClientWebSocketResponse | None = None
         self._task: asyncio.Task[None] | None = None
@@ -66,6 +74,23 @@ class ProxyClient:
         #: The daemon's own version.
         self.daemon_version: str | None = None
 
+        #: What the radio was last seen doing: `receiving`, `transmitting`,
+        #: `idle` or `faulted`, and `None` while there is no connection to ask.
+        #: This is the refinement `available` cannot carry — a transmitter that
+        #: is unavailable is either unreachable or broken, and which of the two
+        #: is the entire question when something stops working.
+        self.state: str | None = None
+        #: When the current connection was established, and how many previous
+        #: ones ended. Kept because an intermittent link is invisible from a
+        #: connected socket: the only trace it leaves is how recently this one
+        #: started.
+        self.connected_since: datetime | None = None
+        self.disconnects = 0
+        #: When the receiver last heard anything at all. The one reading that
+        #: says whether the receive path works, rather than whether the daemon
+        #: is answering.
+        self.last_rx_frame: datetime | None = None
+
     def add_availability_listener(
         self, listener: Callable[[bool], None]
     ) -> Callable[[], None]:
@@ -77,6 +102,20 @@ class ProxyClient:
                 self._availability_listeners.remove(listener)
 
         return unsubscribe
+
+    def add_update_listener(self, listener: Callable[[], None]) -> Callable[[], None]:
+        """Subscribe to any observable change, returning an unsubscribe."""
+        self._update_listeners.append(listener)
+
+        def unsubscribe() -> None:
+            with contextlib.suppress(ValueError):
+                self._update_listeners.remove(listener)
+
+        return unsubscribe
+
+    def _notify(self) -> None:
+        for listener in list(self._update_listeners):
+            listener()
 
     @property
     def available(self) -> bool:
@@ -185,7 +224,15 @@ class ProxyClient:
                 _LOGGER.debug("connection to %s failed: %s", self._url, err)
             finally:
                 self._socket = None
+                # Only a connection that was actually established counts as a
+                # drop. Otherwise a daemon that is simply not running yet would
+                # add one per backoff interval and read as a flapping link.
+                if self.connected_since is not None:
+                    self.disconnects += 1
+                self.connected_since = None
+                self.state = None
                 self._set_available(False)
+                self._notify()
                 self._fail_pending(ProxyError(f"disconnected from {self._url}"))
 
             if self._closing:
@@ -205,7 +252,10 @@ class ProxyClient:
             return
         self.device = status.get("device")
         self.daemon_version = status.get("daemon_version")
+        self.state = status.get("state")
+        self.connected_since = dt_util.utcnow()
         self._set_available(True)
+        self._notify()
 
         async for message in socket:
             if message.type is not aiohttp.WSMsgType.TEXT:
@@ -227,13 +277,17 @@ class ProxyClient:
 
         kind = payload.get("type")
         if kind == "rx_frame":
+            self.last_rx_frame = dt_util.utcnow()
+            self._notify()
             if self._on_rx_frame is not None:
                 self._on_rx_frame(payload)
         elif kind == "device_state":
             # The radio can fault while the connection stays up. Availability
             # follows the radio, because a transmitter that cannot transmit is
             # not available in any sense a consumer cares about.
-            self._set_available(payload.get("state") != "faulted")
+            self.state = payload.get("state")
+            self._set_available(self.state != "faulted")
+            self._notify()
         elif kind == "error":
             _LOGGER.warning("%s reported: %s", self._url, payload.get("message"))
 
