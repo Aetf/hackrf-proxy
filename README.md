@@ -27,6 +27,8 @@ What exists:
   every command field.
 - `docs/MAPPING.md` — how to confirm the remaining command fields, and why
   that procedure cannot miss one.
+- `docs/STATE.md` — the integration as a state machine: every event, every
+  edge, and the four defects enumerating them exposed.
 - `docs/DESIGN.md` — architecture, host selection, milestones.
 - `tools/` — `wsprobe.py` (dependency-free WebSocket client for the daemon),
   `decode_proflame.py` (reference decoder) and `analyze_cmd_csv.py`
