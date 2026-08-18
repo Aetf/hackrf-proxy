@@ -275,16 +275,39 @@ hackrf-proxy/
      offline path is two-pass. Live, the threshold has to be bounded below by a
      statistic a burst cannot move (the median-to-third-quartile noise spread),
      or quiet windows read as signal and the threshold lands inside the noise.
-3. **M3 — `hackrf_proxy` integration**: transmitter entity + availability;
-   verify a stock consumer would accept it (config-flow filter).
-4. **M4 — `proflame_protocol` + `proflame` TX**: the Rust protocol half is
-   ~~done 2026-08-16~~ (`proxyd/src/proflame.rs`, both directions, pinned by
-   regression tests against `tests/`). Remaining: the HA consumer integration —
-   config flow with a transmitter picker, and entities.
-5. **M5 — RX state sync**: decoder, dispatcher bridge, loop protection;
-   physical remote and HA converge. The daemon side already exists: `rx_frame`
-   events carry the timings, and `proflame::decode` turns them into frames.
-6. **M6 — polish**: reconnect robustness, diagnostics, docs, upstream PRs.
+3. ~~**M3 — `hackrf_proxy` integration**~~ **done 2026-08-17.** A
+   `radio_frequency` transmitter entity over a reconnecting WebSocket client,
+   declaring the whole tuning range on purpose. Two things worth recording:
+   - **Availability follows the radio, not the socket.** The daemon keeps
+     serving with a faulted radio, so a connected socket proves nothing; the
+     client only calls itself available once a `status` has come back.
+   - **Replies are matched by id.** A transmission's own `device_state` event
+     overtakes its reply, so reading "the next message" works right up until
+     the first transmission.
+4. ~~**M4 — `proflame_protocol` + `proflame` TX**~~ **done 2026-08-17.** The
+   Rust half is `proxyd/src/proflame.rs`, both directions, pinned by regression
+   tests against `tests/`. The consumer integration learns the handset by
+   listening rather than asking anyone to type hex — the checksum constants are
+   per handset, which is exactly what makes smartfire's hardcoded ones wrong
+   for every other remote.
+5. ~~**M5 — RX state sync**~~ **done 2026-08-17, in the reduced form the
+   hardware allows.** Home Assistant follows the handset by decoding what the
+   receiver hears. The other direction is not a matter of effort: the handset
+   has no receiver, so it cannot follow us, and after a command from Home
+   Assistant it is stale. `docs/PROTOCOL.md` explains why there is no
+   protocol-level fix.
+6. **M6 — polish**: the remaining milestone.
+   - ~~Reconnect robustness~~ — done; `client.py` reconnects with a widening
+     backoff.
+   - ~~Diagnostics for `proflame`~~ — done 2026-08-18: whether anything is
+     driving the appliance, and what the radio has and has not managed to send.
+   - **Diagnostics for `hackrf_proxy`** — not done. The transmitter cannot be
+     asked anything, so a connection problem is visible only in the log.
+   - **Upstream PRs** — not started.
+
+   The integration's own behaviour is specified separately, in `docs/STATE.md`:
+   every event, every edge, and the seven defects that writing them down
+   exposed. All seven are fixed.
 
 ## 6. Open questions
 
@@ -301,7 +324,9 @@ Resolved:
 Still open:
 
 - Whether the receiver should ever be squelched automatically while Home
-  Assistant is not listening. It costs nothing but USB bandwidth today.
+  Assistant is not listening. It costs nothing but USB bandwidth today, and
+  squelching it would break following the handset, which is the one thing the
+  receiver is for.
 - Authentication. The daemon is unauthenticated on the LAN, which is the same
   posture as an ESPHome node, but it can *transmit* — the exposure is worth a
   decision before it moves to a less trusted network.

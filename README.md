@@ -4,16 +4,24 @@ Make a HackRF One a shared, network-attached RF transceiver for Home Assistant,
 the way an ESPHome node is a Bluetooth proxy, and on top of it integrate a SIT
 Proflame gas fireplace as first-class HA entities with two-way state sync.
 
-## Where things stand (2026-08-17)
+## Where things stand (2026-08-18)
 
-**M1, M2 and M4 are done.** The protocol is solved and both directions are
-proven on real hardware: a frame captured from the remote, replayed by the
-HackRF, ignited the fireplace from cold. The on/off bit has since been captured
-too, so RF can both start and stop the appliance. The daemon exists, runs, and
-has been exercised against the real radio over the network — receiving for
-hours, retuning, transmitting and handing the radio back, and recovering from
-several hundred real USB faults without help. It has decoded live frames off
-the air from the fireplace remote, which closes the last of it.
+**M1 through M5 are done, and the fireplace is driven from Home Assistant in
+daily use.** The protocol is solved and both directions are proven on real
+hardware: a frame captured from the remote, replayed by the HackRF, ignited the
+fireplace from cold. The daemon exists, runs, and has been exercised against
+the real radio over the network — receiving for hours, retuning, transmitting
+and handing the radio back, and recovering from several hundred real USB faults
+without help. Both Home Assistant integrations are installed and working: the
+fireplace appears as a switch, a flame, a blower, a light, a thermostat and an
+auto-off timer, it follows the handset by decoding what the receiver hears, and
+it re-asserts its state on a timer so the appliance cannot quietly drift away
+from what Home Assistant believes.
+
+What is left is M6 — polish. The transmitter integration has no diagnostic
+entities, so a connection problem is only visible in the log; the daemon is
+unauthenticated on the LAN while being able to transmit, which wants a decision
+before it moves anywhere less trusted; and nothing has been offered upstream.
 
 What exists:
 
@@ -28,7 +36,8 @@ What exists:
 - `docs/MAPPING.md` — how to confirm the remaining command fields, and why
   that procedure cannot miss one.
 - `docs/STATE.md` — the integration as a state machine: every event, every
-  edge, and the four defects enumerating them exposed.
+  edge, and the seven defects that enumerating them exposed. All are fixed;
+  the diagnoses are kept because they are the part worth re-reading.
 - `docs/DESIGN.md` — architecture, host selection, milestones.
 - `tools/` — `wsprobe.py` (dependency-free WebSocket client for the daemon),
   `decode_proflame.py` (reference decoder) and `analyze_cmd_csv.py`
@@ -37,11 +46,12 @@ What exists:
   `frames/*.timings.json` (bench captures) and `frames/*.frames.jsonl`
   (recorded by the daemon).
 - `integrations/` — the Home Assistant side: `hackrf_proxy` (the transmitter)
-  and `proflame` (the fireplace).
+  and `proflame` (the fireplace). See `integrations/README.md`.
 - `deploy/` — Containerfile, quadlet unit, podman wrapper, udev rule.
 
-What does not exist yet: both Home Assistant integrations (M3 and M4's consumer
-half, M5's state sync). See the milestones in `docs/DESIGN.md`.
+Two command fields, `aux` and split flame, are documented as unconfirmable
+rather than unmapped: this appliance does not have them. `docs/MAPPING.md`
+says why that is a conclusion and not a gap.
 
 ## Safety: both directions are now reachable
 
@@ -85,20 +95,25 @@ udev and rootless-podman traps that cost real time here.
 
 ## Next
 
-1. Drive the fireplace from Home Assistant end to end, which needs one real
-   transmission to prove the path.
-2. **M5, in the reduced form the hardware allows.** Following the handset
-   already works; the part that cannot work is the handset following us.
-3. ~~Map the remaining command fields.~~ Done (2026-08-17): six confirmed by
-   controlled captures, two unreachable on this appliance. See
-   `docs/MAPPING.md`.
-4. Decide where the radio finally lives. The garage cannot hear the fireplace;
-   candidates are a small host in the living room or an ESP32-C6 with a CC1101
-   beside the fireplace, which would be a native HA transmitter needing no
+1. **Diagnostics for `hackrf_proxy`.** The fireplace integration can now be
+   asked what the radio has and has not managed to send; the transmitter
+   cannot be asked anything at all, so a connection problem is visible only by
+   reading the log.
+2. **Decide on authentication.** The daemon is unauthenticated on the LAN,
+   which is the same posture as an ESPHome node except that this one can
+   *transmit*. Worth settling before it moves to a less trusted network.
+3. **Decide where the radio finally lives.** The garage cannot hear the
+   fireplace; candidates are a small host in the living room or an ESP32-C6
+   with a CC1101 beside it, which would be a native HA transmitter needing no
    daemon at all.
+4. **Settle the echo question**, which needs a second receiver — the HackRF is
+   half-duplex and deaf while it transmits, so it cannot hear a reply to its
+   own frame. See `docs/PROTOCOL.md`.
 
-Done: M1 (protocol solved, replay ignites), M4's Rust half (`proflame.rs`,
-pinned by regression tests), M2 (the daemon), and the command-field mapping.
+Done: M1 (protocol solved, replay ignites), M2 (the daemon), M3 (the
+transmitter integration), M4 (`proflame.rs` pinned by regression tests, and the
+consumer integration), M5 (following the handset off the air), and the
+command-field mapping.
 
 The one thing to know before writing the integrations: **the appliance is
 stateless and the handset holds the state**, so Home Assistant and the handset
