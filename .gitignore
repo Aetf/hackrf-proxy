@@ -3,3 +3,6 @@ target/
 *.cs8
 captures/
 __pycache__/
+.venv/
+dist/
+*.egg-info/

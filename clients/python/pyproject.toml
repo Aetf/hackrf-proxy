@@ -1,0 +1,53 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "hackrf-proxy-client"
+dynamic = ["version"]
+description = "Async WebSocket client for the hackrf-proxyd network-attached OOK transceiver daemon"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+license-files = ["../../LICENSE-MIT", "../../LICENSE-APACHE", "../../COPYRIGHT"]
+requires-python = ">=3.12"
+authors = [{ name = "Aetf", email = "aetf@unlimited-code.works" }]
+keywords = ["hackrf", "sdr", "ook", "websocket", "home-assistant"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Framework :: AsyncIO",
+    "Topic :: Home Automation",
+]
+dependencies = ["aiohttp>=3.9"]
+
+[project.urls]
+Homepage = "https://github.com/Aetf/hackrf-proxy"
+Repository = "https://github.com/Aetf/hackrf-proxy"
+Issues = "https://github.com/Aetf/hackrf-proxy/issues"
+Changelog = "https://github.com/Aetf/hackrf-proxy/blob/main/CHANGELOG.md"
+
+[dependency-groups]
+dev = ["pytest>=8", "pytest-aiohttp>=1.0"]
+
+# The client is versioned in lockstep with the daemon: both come from the
+# repository's vX.Y.Z tag, which release-plz derives from Cargo.toml. The
+# compatibility contract is same-major.
+[tool.hatch.version]
+source = "vcs"
+raw-options = { root = "../.." }
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "D"]
+ignore = ["D203", "D213"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["D"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

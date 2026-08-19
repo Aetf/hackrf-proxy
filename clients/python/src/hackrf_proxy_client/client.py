@@ -2,6 +2,12 @@
 
 Thin on purpose: it moves raw OOK timings and knows nothing about any
 appliance. The daemon's protocol is documented in `proxyd/README.md`.
+
+Client and daemon are released from the same repository under one version
+number, and the compatibility contract is semver: a client works with any
+daemon of the same major version. The wire-level `v` field is the daemon's
+own last-resort gate; `is_compatible` is this side's check, from the version
+the daemon reports in its status reply.
 """
 
 from __future__ import annotations
@@ -9,19 +15,30 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 import contextlib
-from datetime import datetime
+from datetime import UTC, datetime
+from importlib.metadata import PackageNotFoundError, version as _package_version
 import logging
 from typing import Any
 
 import aiohttp
 
-from homeassistant.util import dt as dt_util
-
 _LOGGER = logging.getLogger(__name__)
+
+try:
+    __version__ = _package_version("hackrf-proxy-client")
+except PackageNotFoundError:  # running from a checkout, not an install
+    __version__ = "0.0.0"
 
 #: Protocol version this client speaks. The daemon refuses anything else by
 #: name rather than misreading it.
 PROTOCOL_VERSION = 1
+
+
+def _semver_major(version_string: str) -> int | None:
+    """The major component, or None when the string is not a version."""
+    head = version_string.split(".", 1)[0]
+    return int(head) if head.isdigit() else None
+
 
 #: How long to wait for a reply. Generous because a reply arrives when the
 #: transmission is *over*, and the daemon allows up to 30 seconds of air time
@@ -121,6 +138,21 @@ class ProxyClient:
     def available(self) -> bool:
         """Whether the daemon is currently connected."""
         return self._connected.is_set()
+
+    @property
+    def is_compatible(self) -> bool | None:
+        """Whether the daemon's major version matches this client's.
+
+        None while no daemon version has been seen, or when either side's
+        version cannot be parsed — unknown is not the same as incompatible.
+        """
+        if self.daemon_version is None:
+            return None
+        ours = _semver_major(__version__)
+        theirs = _semver_major(self.daemon_version)
+        if ours is None or theirs is None:
+            return None
+        return ours == theirs
 
     @property
     def url(self) -> str:
@@ -252,8 +284,16 @@ class ProxyClient:
             return
         self.device = status.get("device")
         self.daemon_version = status.get("daemon_version")
+        if self.is_compatible is False:
+            _LOGGER.warning(
+                "%s runs daemon %s, which is a different major version than "
+                "client %s; same-major is the supported pairing",
+                self._url,
+                self.daemon_version,
+                __version__,
+            )
         self.state = status.get("state")
-        self.connected_since = dt_util.utcnow()
+        self.connected_since = datetime.now(UTC)
         self._set_available(True)
         self._notify()
 
@@ -277,7 +317,7 @@ class ProxyClient:
 
         kind = payload.get("type")
         if kind == "rx_frame":
-            self.last_rx_frame = dt_util.utcnow()
+            self.last_rx_frame = datetime.now(UTC)
             self._notify()
             if self._on_rx_frame is not None:
                 self._on_rx_frame(payload)
