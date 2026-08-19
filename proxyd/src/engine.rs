@@ -499,7 +499,7 @@ impl State {
     /// Coming out of the fault is deliberately provisional. A HackRF whose
     /// bulk streaming is broken still answers control transfers perfectly
     /// well, so asking it to identify itself proves almost nothing — on the
-    /// XPS that produced 435 faults, 408 of them spaced at exactly the retry
+    /// bench laptop that produced 435 faults, 408 of them spaced at exactly the retry
     /// interval, each one a confident "radio recovered" followed immediately
     /// by the same failed read. Recovery is only believed once a transfer has
     /// actually arrived, which is why [`Self::pump`] clears the backoff and
@@ -931,7 +931,7 @@ mod tests {
         );
     }
 
-    /// The failure this was written for, observed on the XPS: a radio whose
+    /// The failure this was written for, observed on the bench laptop: a radio whose
     /// bulk streaming is broken still answers control transfers, so every
     /// retry declared success and immediately failed again — 435 faults, 408
     /// of them spaced at exactly the retry interval, for three and a half

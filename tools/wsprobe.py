@@ -7,7 +7,7 @@ the box you are debugging from — which, on a headless server, is most of them.
     tools/wsprobe.py                                   # status
     tools/wsprobe.py '{"type":"status"}'               # any raw request
     tools/wsprobe.py --listen                          # follow rx_frame events
-    tools/wsprobe.py --host 10.0.0.5 --port 8765 ...
+    tools/wsprobe.py --host radio-host --port 8765 ...
 
 Each argument is sent as one request and its reply printed. With --listen it
 then keeps printing pushed events until interrupted, which is how you watch

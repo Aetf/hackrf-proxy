@@ -13,7 +13,7 @@
 # and worse: a suspended device fails its next bulk transfer with "hardware
 # fault or protocol violation", and because control transfers still answer, a
 # naive recovery check thinks the radio is fine and restarts straight into the
-# same failure. We watched exactly that on the XPS — 435 faults, 408 of them
+# same failure. We watched exactly that on the bench laptop — 435 faults, 408 of them
 # spaced at precisely the retry interval.
 #
 # This file supplements rather than replaces the packaged rule, so new device

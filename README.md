@@ -1,74 +1,28 @@
 # hackrf-proxy
 
-Make a HackRF One a shared, network-attached RF transceiver for Home Assistant,
-the way an ESPHome node is a Bluetooth proxy, and on top of it integrate a SIT
-Proflame gas fireplace as first-class HA entities with two-way state sync.
+Make a HackRF One a shared, network-attached RF transceiver — the way an
+ESPHome node is a Bluetooth proxy. A Rust daemon owns the radio and serves a
+WebSocket API that moves raw OOK timings; a Python client library speaks it.
+Built for Home Assistant's `radio_frequency` platform, useful to anything
+that wants a sub-GHz OOK radio on the network.
 
-## Where things stand (2026-08-18)
+Two artifacts, released in lockstep from this repository:
 
-**M1 through M5 are done, and the fireplace is driven from Home Assistant in
-daily use.** The protocol is solved and both directions are proven on real
-hardware: a frame captured from the remote, replayed by the HackRF, ignited the
-fireplace from cold. The daemon exists, runs, and has been exercised against
-the real radio over the network — receiving for hours, retuning, transmitting
-and handing the radio back, and recovering from several hundred real USB faults
-without help. Both Home Assistant integrations are installed and working: the
-fireplace appears as a switch, a flame, a blower, a light, a thermostat and an
-auto-off timer, it follows the handset by decoding what the receiver hears, and
-it re-asserts its state on a timer so the appliance cannot quietly drift away
-from what Home Assistant believes.
+- **`hackrf-proxyd`** ([crates.io](https://crates.io/crates/hackrf-proxyd)) —
+  the daemon and the `hrf` CLI. Also published as a ~12 MB container image,
+  `ghcr.io/aetf/hackrf-proxyd`, and as static musl binaries on each release.
+- **`hackrf-proxy-client`** ([PyPI](https://pypi.org/project/hackrf-proxy-client/))
+  — an async Python client: reconnecting connection, id-matched replies,
+  availability that follows the radio rather than the socket.
 
-Both integrations report on themselves: the fireplace says what the radio has
-and has not managed to send, and the transmitter says what the radio is doing,
-when it last heard anything, and how steady the connection to it has been.
+A client works with any daemon of the same semver major version.
 
-What is left is the end of M6. The daemon is unauthenticated on the LAN while
-being able to transmit, which wants a decision before it moves anywhere less
-trusted, and nothing has been offered upstream.
-
-What exists:
-
-- `proxyd/` — a library crate with `hrf` on top. `hrf serve` is the daemon: a
-  protocol-agnostic WebSocket radio proxy with a half-duplex arbiter, a
-  streaming receiver and fault recovery. The rest of the subcommands are the
-  bench tools — `info`, `scan`, `capture`, `demod`, `decode`, `transmit`.
-  Everything but `radio.rs` is tested without hardware, the arbiter included.
-  See `proxyd/README.md` for the wire protocol.
-- `docs/PROTOCOL.md` — the Proflame protocol, solved: framing, checksums and
-  every command field.
-- `docs/MAPPING.md` — how to confirm the remaining command fields, and why
-  that procedure cannot miss one.
-- `docs/STATE.md` — the integration as a state machine: every event, every
-  edge, and the seven defects that enumerating them exposed. All are fixed;
-  the diagnoses are kept because they are the part worth re-reading.
-- `docs/DESIGN.md` — architecture, host selection, milestones.
-- `tools/` — `wsprobe.py` (dependency-free WebSocket client for the daemon),
-  `decode_proflame.py` (reference decoder) and `analyze_cmd_csv.py`
-  (re-derives the checksum from the inherited table).
-- `tests/` — `cmd.csv` (220 inherited packets, 5 remotes),
-  `frames/*.timings.json` (bench captures) and `frames/*.frames.jsonl`
-  (recorded by the daemon).
-- `integrations/` — the Home Assistant side: `hackrf_proxy` (the transmitter)
-  and `proflame` (the fireplace). See `integrations/README.md`.
-- `deploy/` — Containerfile, quadlet unit, podman wrapper, udev rule.
-
-Two command fields, `aux` and split flame, are documented as unconfirmable
-rather than unmapped: this appliance does not have them. `docs/MAPPING.md`
-says why that is a conclusion and not a gap.
-
-## Safety: both directions are now reachable
-
-The off command was captured on 2026-08-16, which retires the asymmetry this
-section used to warn about. `cmd1` bit 0 is on/off, and a verbatim off frame is
-on file, so the fireplace can be both started and stopped by replaying frames
-the remote itself has sent.
-
-The rule that got us here still binds: replaying a captured frame verbatim is
-safe, because it can only reproduce a state the remote just asked for.
-Synthesising a command that has never been observed means guessing bits on a
-gas appliance, and is not something to settle by experiment. Thermostat mode
-deserves particular care whenever it is mapped, since it makes the appliance
-cycle on its own and will fight Home Assistant.
+Related repositories:
+[hass-hackrf-proxy](https://github.com/Aetf/hass-hackrf-proxy) (the Home
+Assistant transmitter integration),
+[proflame](https://github.com/Aetf/proflame) and
+[hass-proflame](https://github.com/Aetf/hass-proflame) (the first consumer:
+a SIT Proflame gas fireplace). `docs/DESIGN.md` maps how the pieces fit.
 
 ## Security
 
@@ -84,51 +38,52 @@ Deployment rules until authentication lands (it is on the roadmap):
 - Firewall the listen port so only the Home Assistant host can reach it.
 - Do not port-forward or otherwise expose the daemon to the internet.
 
-## Running it
+Transmitting is also regulated everywhere: what you may send, at which power,
+on which band, is yours to know for your jurisdiction.
 
-The radio currently lives on the XPS laptop, because the garage server is out
-of range of the living room and its own switching noise raises the 315 MHz floor
-fivefold. `hrf` is there at `~/.local/bin/hrf` as a static binary.
+## Running the daemon
 
-As the daemon:
+Install from a release asset, `cargo install hackrf-proxyd --locked`, or pull
+the container; `deploy/` has a rootless-podman quadlet unit and the udev rule
+the radio needs (with the USB-autosuspend trap documented inline).
 
     hrf serve --listen 0.0.0.0:8765 --rx-freq 315M
-    tools/wsprobe.py --host xps --listen        # watch what it hears
+    tools/wsprobe.py --host radio-host --listen     # watch what it hears
 
-At the bench:
+The daemon receives continuously by default, publishing every burst it hears
+as an `rx_frame` event, and lets clients preempt with `transmit` requests: a
+half-duplex arbiter receives by default, hands the radio to a transmission,
+and takes it back. It survives the radio faulting, re-enumerating or
+unplugging, and reports what it is doing over the same API. The wire protocol
+is documented in `proxyd/README.md`.
 
-    ssh xps
-    cd /dev/shm/aetf/workspace
-    hrf capture --freq 315M --seconds 30 --out power.cs8   # press ON, then OFF
-    hrf demod --in power.cs8 --gap-us 3000 --threshold 0.3 --out-all power.json
-    hrf decode --in power.json
+## The bench tools
 
-`--gap-us 3000` is not optional: the inter-frame gap is 4.15 ms, so the 10 ms
-default merges repeats into one blob and smears the histogram.
+The rest of the `hrf` subcommands are for protocol work against a captured
+appliance: `info`, `scan` (a live meter across bands — hold the button down
+and see which band moves), `capture` (IQ to disk), `demod` (offline OOK
+demodulation with a pulse-width histogram, plus `--stream` to replay a
+capture through the live receiver's own code path), and `transmit` (replay a
+timings file).
 
-On the homelab server the same tool runs containerised, and the daemon deploys
-as a rootless quadlet unit — see `proxyd/README.md`, which also documents the
-udev and rootless-podman traps that cost real time here.
+One flag worth knowing before it costs an evening: `demod --gap-us` must be
+below the inter-frame gap of the protocol at hand, or repeats merge into one
+undecodable blob.
 
-## Next
+## Development
 
-1. **Decide on authentication.** The daemon is unauthenticated on the LAN,
-   which is the same posture as an ESPHome node except that this one can
-   *transmit*. Worth settling before it moves to a less trusted network.
-2. **Decide where the radio finally lives.** The garage cannot hear the
-   fireplace; candidates are a small host in the living room or an ESP32-C6
-   with a CC1101 beside it, which would be a native HA transmitter needing no
-   daemon at all.
-3. **Settle the echo question**, which needs a second receiver — the HackRF is
-   half-duplex and deaf while it transmits, so it cannot hear a reply to its
-   own frame. See `docs/PROTOCOL.md`.
+    cargo test --manifest-path proxyd/Cargo.toml       # 49 tests, no hardware needed
+    cd clients/python && uv sync && uv run pytest
 
-Done: M1 (protocol solved, replay ignites), M2 (the daemon), M3 (the
-transmitter integration), M4 (`proflame.rs` pinned by regression tests, and the
-consumer integration), M5 (following the handset off the air), and the
-command-field mapping.
+Everything except `radio.rs` is tested without a radio, the arbiter included.
+The Python suite runs the client against a scripted daemon and pins the
+protocol version against `wire.rs`, so the two ends of the wire cannot drift
+apart in this repository unnoticed.
 
-The one thing to know before writing the integrations: **the appliance is
-stateless and the handset holds the state**, so Home Assistant and the handset
-are two state holders that cannot hear each other. `docs/PROTOCOL.md` explains
-what that costs.
+Commits follow conventional commits; releasing is
+[release-plz](https://release-plz.dev/) — merging the standing release PR
+publishes crates.io, PyPI, the container and the binaries in one motion.
+
+## License
+
+MIT OR Apache-2.0, at your option.

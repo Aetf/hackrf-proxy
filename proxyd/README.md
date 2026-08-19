@@ -1,8 +1,8 @@
 # hackrf-proxyd
 
 `hrf`: the daemon that makes a HackRF a network-attached radio, and the bench
-tools the protocol was solved with. `hrf serve` is the daemon; `capture`,
-`demod`, `decode`, `transmit`, `scan` and `info` are the tools.
+tools to solve OOK protocols with. `hrf serve` is the daemon; `capture`,
+`demod`, `transmit`, `scan` and `info` are the tools.
 
 Driver: `seify-hackrfone` (pure Rust, nusb, no C dependencies). `rs-hackrf` was
 rejected: it is receive-only and cannot drive the transmit path.
@@ -15,21 +15,17 @@ without a radio on the bench:
 
     src/lib.rs       crate root; the layering contract lives in its doc comment
     src/ook.rs       signal processing: IQ <-> timings, bursts, histograms, streaming
-    src/proflame.rs  the Proflame protocol: timings <-> frames, checksums, keys
     src/wire.rs      the WebSocket protocol: types and validation
     src/engine.rs    the half-duplex arbiter, over a Transceiver trait
     src/server.rs    the WebSocket front end
     src/radio.rs     the only module that needs a HackRF plugged in
     src/main.rs      the hrf CLI
-    tests/           regression against ../tests (inherited table + own captures)
 
 Everything except `radio.rs` is tested without hardware, including the arbiter,
-which runs against a fake device. The integration tests freeze the protocol
-results in place: all 440 checksum bytes of the inherited `cmd.csv`, and every
-clean frame of our own captures, must keep decoding to exactly the values
-documented in docs/PROTOCOL.md. `tools/decode_proflame.py` remains as an
-independent reference implementation; its report and `hrf decode`'s agree byte
-for byte on the regression captures.
+which runs against a fake device. The daemon carries no appliance protocol:
+frame decoding belongs to consumers — the first is the
+[proflame](https://github.com/Aetf/proflame) library, whose golden tests pin
+the daemon-recorded captures it was solved from.
 
 ## The daemon
 
@@ -42,16 +38,17 @@ shared radio proxy rather than one appliance's bridge.
 
 Poke it with `tools/wsprobe.py` (no dependencies, for boxes without websocat):
 
-    tools/wsprobe.py --host homelab --port 8765            # status
-    tools/wsprobe.py --host homelab --listen               # watch rx_frame events
+    tools/wsprobe.py --host radio-host --port 8765         # status
+    tools/wsprobe.py --host radio-host --listen            # watch rx_frame events
 
 ### Recording what it hears
 
     hrf serve --record frames.jsonl
-    hrf decode --in frames.jsonl
 
 One JSON object per line, flushed as each frame arrives, so the file is
-readable while the radio keeps running and `decode` reads it directly.
+readable while the radio keeps running; protocol tooling (for example the
+[proflame](https://github.com/Aetf/proflame) library) reads the shape
+directly.
 
 Use this rather than a listening client for any protocol work. Mapping a
 remote's unknown fields means pressing buttons and comparing frames, often
@@ -89,7 +86,7 @@ Two things a client has to get right:
 `transmit` replies when the air time is over, not when the request is queued,
 so a client knows the transmission actually happened.
 
-### Verified on the real radio (2026-08-17, XPS)
+### Verified on the real radio (2026-08-17, bench laptop)
 
 Everything the daemon does has now run against a HackRF One, over the network:
 the receiver streams continuously for hours and learns its threshold from live
@@ -144,7 +141,7 @@ transmission is a long deafness for every other client.
 - **Recovery is only believed once a transfer arrives.** A HackRF whose bulk
   streaming is broken still answers control transfers, so "it identified
   itself" is not evidence that it works. Getting this wrong produced 435 faults
-  in four hours on the XPS, 408 of them spaced at exactly the retry interval.
+  in four hours on the bench laptop, 408 of them spaced at exactly the retry interval.
 - **The receiver needs one window (a second by default) to learn the band**
   before it can slice it, so nothing is detected in the first second.
 - **A slow client loses events rather than slowing the radio down.** Falling
@@ -236,10 +233,6 @@ The rule supplements the packaged one rather than replacing it, so new device
 ids keep coming from the package. It uses the `wheel` group because this host
 has no `plugdev`; change it to any group you belong to.
 
-On the aconfmgr-managed homelab, this belongs in the config rather than being
-dropped into `/etc` by hand — it is `roles/sdr.bash` there, enabled from the
-host config, and applied with `aconfmgr apply`.
-
 `hrf info` should then print a board id and firmware version. If it instead
 reports that the HackRF is present but could not be opened, and names a node
 under `/dev/bus/usb`, the rule has not taken effect yet.
@@ -265,9 +258,8 @@ How the protocol was solved, and how to map a field that is still unknown.
     #    merges repeats into one blob.
     hrf demod --in captures/flame_up.cs8 --gap-us 3000 --out captures/flame_up.json
 
-    # 3b. Decode the Proflame framing: fields per frame, framing violations,
-    #     and the per-remote checksum constants.
-    hrf decode --in captures/flame_up.json
+    # 3b. Decode the framing with the protocol's own tooling — for Proflame,
+    #     the decoder in the proflame repository reads this file directly.
 
     # 4. Replay. Keep --amp off at close range.
     hrf transmit --freq 315000000 --file captures/flame_up.json --repeat 4
@@ -323,7 +315,8 @@ should stand well clear of that.
 
 ### Site noise matters, and 315 MHz is the bad case here
 
-An idle `scan` from the garage server, same gains throughout:
+An idle `scan` from a rack server whose own switching noise lands in-band,
+same gains throughout:
 
 | band | peak | 99.9% |
 |------|------|-------|

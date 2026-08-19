@@ -26,7 +26,8 @@ import aiohttp
 _LOGGER = logging.getLogger(__name__)
 
 try:
-    __version__ = _package_version("hackrf-proxy-client")
+    # `or "0.0.0"` covers a damaged install whose metadata lacks a version.
+    __version__ = _package_version("hackrf-proxy-client") or "0.0.0"
 except PackageNotFoundError:  # running from a checkout, not an install
     __version__ = "0.0.0"
 
