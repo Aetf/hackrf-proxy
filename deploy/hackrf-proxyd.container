@@ -18,7 +18,7 @@ Wants=network-online.target
 After=network-online.target
 
 [Container]
-Image=localhost/hackrf-proxyd:latest
+Image=ghcr.io/aetf/hackrf-proxyd:latest
 Exec=serve --listen 0.0.0.0:8765 --rx-freq 315M
 
 # The container runs as root deliberately. Under rootless podman its root maps

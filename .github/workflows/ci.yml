@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Renovate rebases push in quick succession; don't stack stale runs. Only
+# PR runs are cancelled — a superseded push to main should still finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rustfmt:
+    name: Rustfmt
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - run: cargo fmt --check --verbose --manifest-path proxyd/Cargo.toml
+
+  clippy:
+    name: Clippy ${{ matrix.toolchain }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [stable, beta]
+    continue-on-error: ${{ matrix.toolchain == 'beta' }}
+    env:
+      RUSTFLAGS: --deny warnings
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: proxyd
+      - run: cargo fetch --locked --manifest-path proxyd/Cargo.toml
+      - run: cargo clippy --offline --all-targets --manifest-path proxyd/Cargo.toml
+      - run: cargo doc --offline --no-deps --manifest-path proxyd/Cargo.toml
+
+  test:
+    name: Test ${{ matrix.toolchain }} ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [stable, beta]
+        # The daemon targets Linux (udev, USB); arm64 is the likely small-host
+        # deployment and the runners are native, so test it for real.
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    continue-on-error: ${{ matrix.toolchain == 'beta' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: proxyd
+      - run: cargo fetch --locked --manifest-path proxyd/Cargo.toml
+      - run: cargo build --offline --all-targets --manifest-path proxyd/Cargo.toml
+      - run: cargo test --offline --manifest-path proxyd/Cargo.toml
+
+  python-client:
+    name: Python client ${{ matrix.python }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # hatch-vcs derives the version from git history.
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+      - run: uvx ruff check .
+        working-directory: clients/python
+      - run: |
+          uv venv --python ${{ matrix.python }}
+          uv pip install -e . --group dev
+          uv run pytest
+        working-directory: clients/python
+
+  renovate-config:
+    name: Validate renovate config
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - run: npx --yes --package renovate -- renovate-config-validator --strict

@@ -8,8 +8,8 @@ import re
 from pathlib import Path
 
 import aiohttp
-from aiohttp import web
 import pytest
+from aiohttp import web
 
 from hackrf_proxy_client import PROTOCOL_VERSION, ProxyClient, ProxyError
 from hackrf_proxy_client.client import _semver_major

@@ -1,0 +1,19 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended", ":automergeMinor", "group:allNonMajor"],
+  "labels": ["renovate"],
+  "rangeStrategy": "update-lockfile",
+  "automergeStrategy": "squash",
+  "packageRules": [
+    {
+      "description": "Minor bumps of 0.x dependencies are semver-breaking in practice",
+      "automerge": false,
+      "matchCurrentVersion": "< 1.0.0",
+      "matchUpdateTypes": ["minor"]
+    },
+    {
+      "matchDepTypes": ["devDependencies", "dependency-groups"],
+      "automerge": true
+    }
+  ]
+}

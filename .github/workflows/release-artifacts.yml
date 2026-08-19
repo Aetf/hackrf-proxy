@@ -1,0 +1,100 @@
+# Everything that hangs off a release tag. The tag is pushed by release-plz
+# (publish.yml) with an App token, which is what allows this workflow to fire.
+# The daemon and the Python client are versioned in lockstep: both artifacts
+# are built from the same vX.Y.Z tag.
+name: Release artifacts
+
+on:
+  push:
+    tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+
+env:
+  IMAGE: ghcr.io/aetf/hackrf-proxyd
+
+jobs:
+  publish-pypi:
+    name: Publish hackrf-proxy-client
+    runs-on: ubuntu-24.04
+    permissions:
+      # PyPI trusted publishing (OIDC): no long-lived token to leak.
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # hatch-vcs takes the version from the tag.
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+      - run: uv build
+        working-directory: clients/python
+      - uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: clients/python/dist
+
+  binaries:
+    name: Static binary ${{ matrix.target }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            target: x86_64-unknown-linux-musl
+          - runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - run: sudo apt-get install -y --no-install-recommends musl-tools
+      - run: cargo build --release --locked --manifest-path proxyd/Cargo.toml --target ${{ matrix.target }}
+      - name: Package
+        run: |
+          strip "proxyd/target/${{ matrix.target }}/release/hrf"
+          tar -C "proxyd/target/${{ matrix.target }}/release" -czf \
+            "hrf-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz" hrf
+      - name: Attach to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" "hrf-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz" --clobber
+
+  container:
+    name: Container ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            arch: amd64
+          - runner: ubuntu-24.04-arm
+            arch: arm64
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and push per-arch image
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          podman build -f deploy/Containerfile -t "$IMAGE:$VERSION-${{ matrix.arch }}" .
+          podman login ghcr.io -u "$GITHUB_ACTOR" -p "${{ github.token }}"
+          podman push "$IMAGE:$VERSION-${{ matrix.arch }}"
+
+  container-manifest:
+    name: Container manifest
+    runs-on: ubuntu-24.04
+    needs: container
+    permissions:
+      packages: write
+    steps:
+      - name: Assemble and push the multi-arch manifest
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          podman login ghcr.io -u "$GITHUB_ACTOR" -p "${{ github.token }}"
+          podman manifest create "$IMAGE:$VERSION" \
+            "docker://$IMAGE:$VERSION-amd64" \
+            "docker://$IMAGE:$VERSION-arm64"
+          podman manifest push --all "$IMAGE:$VERSION" "docker://$IMAGE:$VERSION"
+          podman manifest push --all "$IMAGE:$VERSION" "docker://$IMAGE:latest"

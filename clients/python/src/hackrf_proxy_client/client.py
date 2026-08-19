@@ -13,11 +13,12 @@ the daemon reports in its status reply.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
 import contextlib
-from datetime import UTC, datetime
-from importlib.metadata import PackageNotFoundError, version as _package_version
 import logging
+from collections.abc import Callable
+from datetime import UTC, datetime
+from importlib.metadata import PackageNotFoundError
+from importlib.metadata import version as _package_version
 from typing import Any
 
 import aiohttp
