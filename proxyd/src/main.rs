@@ -8,14 +8,13 @@
 //!
 //! This binary is a thin shell. Everything worth testing lives in the library.
 
-use std::collections::BTreeMap;
 use std::fs::File;
 use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{ensure, Context, Result};
 use clap::{Parser, Subcommand};
-use hackrf_proxyd::{engine, ook, proflame, radio, server};
+use hackrf_proxyd::{engine, ook, radio, server};
 
 #[derive(Parser)]
 #[command(
@@ -123,18 +122,6 @@ enum Command {
         /// analysis across repeats.
         #[arg(long, value_name = "FILE")]
         out_all: Option<PathBuf>,
-    },
-
-    /// Decode Proflame frames from demodulated timings.
-    ///
-    /// Accepts the JSON written by `demod --out` (one burst) or `--out-all`
-    /// (a list of bursts). Prints every burst's fields, the framing rules
-    /// that failed, and the per-remote checksum constants derived from the
-    /// clean frames.
-    Decode {
-        /// Timings JSON file(s); repeatable.
-        #[arg(long, value_name = "FILE", required = true)]
-        r#in: Vec<PathBuf>,
     },
 
     /// Run the daemon: a WebSocket radio proxy on the LAN.
@@ -304,7 +291,6 @@ fn main() -> Result<()> {
             out: out.as_deref(),
             out_all: out_all.as_deref(),
         }),
-        Command::Decode { r#in } => decode(&r#in),
         Command::Serve {
             listen,
             rx_freq,
@@ -579,160 +565,6 @@ async fn shutdown_signal() {
     }
     #[cfg(not(unix))]
     let _ = interrupt.await;
-}
-
-/// `demod --out` writes one burst, `--out-all` a list of bursts; accept both.
-#[derive(serde::Deserialize)]
-#[serde(untagged)]
-enum TimingsFile {
-    Many(Vec<Vec<i64>>),
-    One(Vec<i64>),
-}
-
-/// One line of `serve --record`: an rx_frame event as it went out on the wire.
-#[derive(serde::Deserialize)]
-struct RecordedFrame {
-    timings: Vec<i64>,
-}
-
-/// Read a file of bursts, whichever of the three shapes it is in.
-///
-/// The daemon's recording is JSON Lines rather than one array, so that it can
-/// be appended to for as long as the radio runs and still be readable while it
-/// does. Detecting it by the leading brace keeps `decode` a single command for
-/// everything the project produces.
-fn read_bursts(path: &Path) -> Result<Vec<Vec<i64>>> {
-    let text = std::fs::read_to_string(path).with_context(|| format!("read {}", path.display()))?;
-    if text.trim_start().starts_with('{') {
-        return text
-            .lines()
-            .filter(|line| !line.trim().is_empty())
-            .map(|line| {
-                serde_json::from_str::<RecordedFrame>(line)
-                    .map(|frame| frame.timings)
-                    .with_context(|| format!("{}: not a recorded frame: {line}", path.display()))
-            })
-            .collect();
-    }
-    match serde_json::from_str(&text)
-        .with_context(|| format!("{}: not a timings JSON file", path.display()))?
-    {
-        TimingsFile::Many(bursts) => Ok(bursts),
-        TimingsFile::One(burst) => Ok(vec![burst]),
-    }
-}
-
-fn decode(paths: &[PathBuf]) -> Result<()> {
-    let mut all_good = true;
-    for path in paths {
-        println!("=== {}", path.display());
-        let bursts = read_bursts(path)?;
-        all_good &= report(&bursts);
-        println!();
-    }
-    ensure!(all_good, "some files had no clean frames or inconsistent checksum constants");
-    Ok(())
-}
-
-/// Print one file's bursts; true when at least one frame decoded cleanly and
-/// the derived checksum constants agree across all clean frames.
-fn report(bursts: &[Vec<i64>]) -> bool {
-    let decoded: Vec<_> = bursts.iter().map(|b| proflame::decode(b)).collect();
-
-    println!("{} frame(s)\n", bursts.len());
-    print!("  frame ");
-    for name in proflame::FIELD_NAMES {
-        print!("{name:>11}");
-    }
-    println!();
-    for (number, burst) in decoded.iter().enumerate() {
-        print!("  {:>5} ", number + 1);
-        for block in &burst.blocks {
-            match block {
-                Some(value) => print!("{:>11}", format!("0x{value:02x}")),
-                None => print!("{:>11}", "--"),
-            }
-        }
-        if !burst.problems.is_empty() {
-            let notes: Vec<_> = burst.problems.iter().map(ToString::to_string).collect();
-            print!("   <- {}", notes.join("; "));
-        }
-        println!();
-    }
-
-    let clean: Vec<_> = decoded.iter().filter_map(|d| Some((d.frame()?, d.keys()?))).collect();
-    if clean.is_empty() {
-        println!("\nno cleanly decoded frames");
-        return false;
-    }
-    println!(
-        "\n{}/{} frames decoded with parity, stop and framing intact",
-        clean.len(),
-        bursts.len()
-    );
-
-    // Distinct values by frequency, for spotting the odd one out.
-    let mut distinct: BTreeMap<[u8; proflame::FRAME_BLOCKS], usize> = BTreeMap::new();
-    for (frame, keys) in &clean {
-        *distinct.entry(frame.blocks(*keys)).or_default() += 1;
-    }
-    println!("{} distinct frame value(s):", distinct.len());
-    let mut by_count: Vec<_> = distinct.iter().map(|(b, c)| (*b, *c)).collect();
-    by_count.sort_by_key(|(_, count)| std::cmp::Reverse(*count));
-    for (blocks, count) in &by_count {
-        print!("  ");
-        for (name, value) in proflame::FIELD_NAMES.iter().zip(blocks) {
-            print!(" {name}=0x{value:02x}");
-        }
-        println!("   x{count}");
-    }
-
-    // The appliance state over time, and — the thing that actually maps a
-    // button — what changed at each step.
-    //
-    // In time order with consecutive repeats collapsed, rather than a set of
-    // distinct values. A sweep that goes up and then back down revisits states
-    // it has already been in, and "distinct values" silently discards the
-    // whole return leg; the diffs also have to be against the state that
-    // really preceded this one, or they read like transitions that never
-    // happened.
-    println!("\nappliance state over time (repeats collapsed):");
-    let mut previous: Option<proflame::State> = None;
-
-    let mut timeline: Vec<(proflame::State, usize)> = Vec::new();
-    for (frame, _) in &clean {
-        let state = frame.state();
-        match timeline.last_mut() {
-            Some((last, count)) if *last == state => *count += 1,
-            _ => timeline.push((state, 1)),
-        }
-    }
-    for (state, count) in &timeline {
-        print!("  {state}   x{count}");
-        if let Some(previous) = previous {
-            let changed = state.differences(&previous);
-            if !changed.is_empty() {
-                print!("   <- changed: {}", changed.join(", "));
-            }
-        }
-        println!();
-        previous = Some(*state);
-    }
-
-    let k1: std::collections::BTreeSet<u8> = clean.iter().map(|(_, k)| k.k1).collect();
-    let k2: std::collections::BTreeSet<u8> = clean.iter().map(|(_, k)| k.k2).collect();
-    let show = |set: &std::collections::BTreeSet<u8>| {
-        let values: Vec<_> = set.iter().map(|k| format!("0x{k:02x}")).collect();
-        format!(
-            "K = {}  {}",
-            values.join(", "),
-            if set.len() == 1 { "consistent" } else { "INCONSISTENT" }
-        )
-    };
-    println!("\nchecksum model  cs = M(cmd) ^ K");
-    println!("   half 1: {}", show(&k1));
-    println!("   half 2: {}", show(&k2));
-    k1.len() == 1 && k2.len() == 1
 }
 
 fn transmit(

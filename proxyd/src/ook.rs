@@ -1,8 +1,8 @@
 //! OOK signal processing: IQ <-> Flipper-RAW timings.
 //!
 //! Pure functions, no hardware. This is where protocol analysis actually
-//! happens, so it carries the unit tests: the M1 conclusions about the
-//! Proflame framing are only as trustworthy as this code.
+//! happens, so it carries the unit tests: any conclusion drawn about a
+//! protocol's framing is only as trustworthy as this code.
 
 use std::collections::BTreeMap;
 

@@ -5,9 +5,6 @@
 //!
 //! - [`ook`] — signal processing. IQ to timings and back, offline and
 //!   streaming. No hardware.
-//! - [`proflame`] — the fireplace protocol, both directions. No hardware, and
-//!   nothing else depends on it: the daemon never links appliance semantics
-//!   into the radio path.
 //! - [`wire`] — the WebSocket protocol's types and validation. No hardware.
 //! - [`engine`] — the half-duplex arbiter. Owns the radio through a trait, so
 //!   the state machine is tested against a fake device.
@@ -16,7 +13,6 @@
 
 pub mod engine;
 pub mod ook;
-pub mod proflame;
 pub mod radio;
 pub mod server;
 pub mod wire;
