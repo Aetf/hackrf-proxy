@@ -70,6 +70,20 @@ gas appliance, and is not something to settle by experiment. Thermostat mode
 deserves particular care whenever it is mapped, since it makes the appliance
 cycle on its own and will fight Home Assistant.
 
+## Security
+
+The daemon has **no authentication**: anyone who can reach its WebSocket port
+can tune the radio and, more importantly, **transmit**. This is the same trust
+posture as `rtl_tcp` or an ESPHome node — it is designed to sit on a trusted
+LAN segment, not to be exposed.
+
+Deployment rules until authentication lands (it is on the roadmap):
+
+- Bind to a specific trusted interface, or to `127.0.0.1` behind a reverse
+  proxy/tunnel, rather than `0.0.0.0` on a machine with untrusted networks.
+- Firewall the listen port so only the Home Assistant host can reach it.
+- Do not port-forward or otherwise expose the daemon to the internet.
+
 ## Running it
 
 The radio currently lives on the XPS laptop, because the garage server is out
