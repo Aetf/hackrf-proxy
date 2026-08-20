@@ -8,7 +8,8 @@ dynamic = ["version"]
 description = "Async WebSocket client for the hackrf-proxyd network-attached OOK transceiver daemon"
 readme = "README.md"
 license = "MIT OR Apache-2.0"
-license-files = ["../../LICENSE-MIT", "../../LICENSE-APACHE", "../../COPYRIGHT"]
+# Copies of the repository-root files: wheel metadata forbids parent paths.
+license-files = ["LICENSE-MIT", "LICENSE-APACHE", "COPYRIGHT"]
 requires-python = ">=3.12"
 authors = [{ name = "Aetf", email = "aetf@unlimited-code.works" }]
 keywords = ["hackrf", "sdr", "ook", "websocket", "home-assistant"]

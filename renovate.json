@@ -1,10 +1,31 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": ["config:recommended", ":automergeMinor", "group:allNonMajor"],
+  "extends": ["config:recommended", ":automergeMinor"],
   "labels": ["renovate"],
   "rangeStrategy": "update-lockfile",
   "automergeStrategy": "squash",
   "packageRules": [
+    {
+      "description": "Group non-major updates per ecosystem, not across them: a Rust bump and a container-image bump have nothing to do with each other and should not share a PR",
+      "matchManagers": ["cargo"],
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
+      "groupName": "rust non-major"
+    },
+    {
+      "matchManagers": ["pep621"],
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
+      "groupName": "python non-major"
+    },
+    {
+      "matchManagers": ["github-actions"],
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
+      "groupName": "github-actions non-major"
+    },
+    {
+      "matchManagers": ["dockerfile"],
+      "matchUpdateTypes": ["minor", "patch", "pin", "digest"],
+      "groupName": "container-images non-major"
+    },
     {
       "description": "Minor bumps of 0.x dependencies are semver-breaking in practice",
       "automerge": false,
