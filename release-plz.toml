@@ -1,4 +1,5 @@
 # Discovered from the repository root (the action's working directory).
 [workspace]
-# The crate lives in proxyd/; keep the changelog at the repository root.
-changelog_path = "CHANGELOG.md"
+# Relative to the directory of the root Cargo.toml (proxyd/), so this is the
+# repository-root CHANGELOG.md.
+changelog_path = "../CHANGELOG.md"
