@@ -21,7 +21,7 @@ jobs:
         id: generate-token
         with:
           app-id: ${{ secrets.RELEASE_PLZ_APP_ID }}
-          private-key: ${{ secrets.RELEASE_PLZ_APP_PRIVATE_KEY }}
+          private-key: ${{ secrets.RELEASE_PLZ_PRIVATE_KEY }}
       - uses: actions/checkout@v4
         with:
           # Full history: release-plz reads it to build the changelog.
