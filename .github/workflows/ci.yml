@@ -72,6 +72,29 @@ jobs:
       - run: cargo build --offline --all-targets --manifest-path proxyd/Cargo.toml
       - run: cargo test --offline --manifest-path proxyd/Cargo.toml
 
+  deps:
+    name: Dependency graph
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: proxyd
+      - run: cargo fetch --locked --manifest-path proxyd/Cargo.toml
+      # nusb reaches the binary twice: directly for hotplug, and through
+      # seify-hackrfone for every transfer. Cargo links a 0.1 and a 0.2 as two
+      # unrelated crates without complaint, because no nusb type crosses the
+      # driver's API and so the two versions never have to agree. The build and
+      # the tests stay green while the process gains a second USB event thread
+      # and a second netlink hotplug socket; only the dependency graph shows it.
+      - name: nusb resolves to a single version
+        run: |
+          if cargo tree --offline --manifest-path proxyd/Cargo.toml --duplicates --depth 0 | grep '^nusb'; then
+            echo "::error::proxyd links more than one version of nusb; it must share one with seify-hackrfone"
+            exit 1
+          fi
+
   python-client:
     name: Python client ${{ matrix.python }}
     runs-on: ubuntu-24.04
