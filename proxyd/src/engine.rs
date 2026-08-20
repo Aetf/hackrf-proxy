@@ -805,7 +805,13 @@ mod tests {
     fn enabling_a_receiver_that_cannot_start_reports_the_failure() {
         let radio = FakeRadio::default();
         radio.shared.lock().unwrap().fail_start_rx = 1;
-        let harness = Harness::start(config(), radio);
+        // Start with the receiver off, so the explicit enable below is the
+        // only start attempt. With the default receive-at-startup config the
+        // engine's own startup races this test for the one scripted failure,
+        // and whichever start_rx runs first consumes it.
+        let mut config = config();
+        config.rx_enabled = false;
+        let harness = Harness::start(config, radio);
 
         let (reply, response) = oneshot::channel();
         harness.send(Command::ConfigureRx { frequency: None, enabled: true, reply });
