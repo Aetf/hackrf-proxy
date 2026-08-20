@@ -32,7 +32,7 @@ jobs:
         with:
           # hatch-vcs takes the version from the tag.
           fetch-depth: 0
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@v10.0.1
       - name: Build
         working-directory: clients/python
         run: |
