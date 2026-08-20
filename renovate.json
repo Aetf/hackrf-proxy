@@ -35,6 +35,12 @@
     {
       "matchDepTypes": ["devDependencies", "dependency-groups"],
       "automerge": true
+    },
+    {
+      "description": "nusb must resolve to a single version shared with seify-hackrfone, which depends on ^0.1.11. Taking 0.2 here compiles and passes the tests — no nusb type crosses the driver's API, so the two versions never meet — and silently links a second copy of the crate. Raise this bound when the driver does, not before",
+      "matchManagers": ["cargo"],
+      "matchPackageNames": ["nusb"],
+      "allowedVersions": "<0.2"
     }
   ]
 }

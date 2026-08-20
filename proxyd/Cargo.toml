@@ -25,6 +25,9 @@ serde_json = "1"
 tokio = { version = "1.53.1", features = ["rt-multi-thread", "macros", "net", "sync", "signal", "time"] }
 tokio-tungstenite = "0.30.0"
 futures-util = "0.3.34"
+# Used directly only to watch for hotplug; every transfer goes through
+# seify-hackrfone, which depends on nusb ^0.1.11. The two must resolve to a
+# single version, so this tracks the driver rather than the newest release.
 nusb = "0.1"
 
 [profile.release]
