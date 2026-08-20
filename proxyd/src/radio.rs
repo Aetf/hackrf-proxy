@@ -53,11 +53,11 @@ pub fn open() -> Result<Arc<HackRf>> {
 /// gain that was never applied, so catch it here instead.
 pub fn validate_rx_gains(lna_db: u16, vga_db: u16) -> Result<()> {
     ensure!(
-        lna_db <= 40 && lna_db % 8 == 0,
+        lna_db <= 40 && lna_db.is_multiple_of(8),
         "LNA gain must be 0..=40 dB in 8 dB steps (got {lna_db})"
     );
     ensure!(
-        vga_db <= 62 && vga_db % 2 == 0,
+        vga_db <= 62 && vga_db.is_multiple_of(2),
         "VGA gain must be 0..=62 dB in 2 dB steps (got {vga_db})"
     );
     Ok(())

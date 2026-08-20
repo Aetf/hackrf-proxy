@@ -32,14 +32,18 @@ pub struct Levels {
 /// L1 rather than sqrt(I²+Q²) because OOK only needs a monotone function of
 /// amplitude, and this keeps the demodulator integer-only.
 pub fn envelope(iq: &[u8]) -> Vec<u16> {
-    iq.chunks_exact(BYTES_PER_SAMPLE)
+    let (samples, _) = iq.as_chunks::<BYTES_PER_SAMPLE>();
+    samples
+        .iter()
         .map(|s| (i32::from(s[0] as i8).abs() + i32::from(s[1] as i8).abs()) as u16)
         .collect()
 }
 
 /// Peak magnitude of a raw cs8 buffer, without materializing an envelope.
 pub fn peak_magnitude(iq: &[u8]) -> u16 {
-    iq.chunks_exact(BYTES_PER_SAMPLE)
+    let (samples, _) = iq.as_chunks::<BYTES_PER_SAMPLE>();
+    samples
+        .iter()
         .map(|s| (i32::from(s[0] as i8).abs() + i32::from(s[1] as i8).abs()) as u16)
         .max()
         .unwrap_or(0)
@@ -93,7 +97,7 @@ impl AmplitudeHistogram {
 
     /// Accumulate straight from an interleaved cs8 buffer.
     pub fn add_iq(&mut self, iq: &[u8]) {
-        for sample in iq.chunks_exact(BYTES_PER_SAMPLE) {
+        for sample in iq.as_chunks::<BYTES_PER_SAMPLE>().0 {
             let magnitude =
                 (i32::from(sample[0] as i8).abs() + i32::from(sample[1] as i8).abs()) as u16;
             self.add_magnitude(magnitude);
@@ -393,7 +397,7 @@ impl Detector {
     /// Feed one chunk of interleaved cs8, returning every burst it completed.
     pub fn push(&mut self, iq: &[u8]) -> Vec<Burst> {
         let mut bursts = Vec::new();
-        for sample in iq.chunks_exact(BYTES_PER_SAMPLE) {
+        for sample in iq.as_chunks::<BYTES_PER_SAMPLE>().0 {
             let magnitude =
                 (i32::from(sample[0] as i8).abs() + i32::from(sample[1] as i8).abs()) as u16;
             self.histogram.add_magnitude(magnitude);
