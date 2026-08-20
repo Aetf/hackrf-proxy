@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1](https://github.com/Aetf/hackrf-proxy/compare/v0.1.0...v0.1.1) - 2026-08-20
+
+### Other
+
+- keep nusb on a single version shared with the driver ([#9](https://github.com/Aetf/hackrf-proxy/pull/9))
+
 ## [0.1.0] - 2026-08-20
 
 The first public release.

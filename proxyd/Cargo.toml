@@ -1,6 +1,6 @@
 [package]
 name = "hackrf-proxyd"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 description = "Network-attached HackRF OOK transceiver daemon with a WebSocket API, built for Home Assistant"
 license = "MIT OR Apache-2.0"
