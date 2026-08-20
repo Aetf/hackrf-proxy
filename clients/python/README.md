@@ -1,6 +1,7 @@
 # hackrf-proxy-client
 
-Async Python client for the [hackrf-proxyd](../../proxyd/) daemon's WebSocket
+Async Python client for the
+[hackrf-proxyd](https://github.com/Aetf/hackrf-proxy) daemon's WebSocket
 protocol: a reconnecting connection with id-matched replies, `rx_frame` event
 delivery, and availability that follows the radio rather than the socket.
 

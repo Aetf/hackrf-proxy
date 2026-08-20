@@ -89,8 +89,11 @@ jobs:
         working-directory: clients/python
       - run: |
           uv sync --python ${{ matrix.python }}
+          uv run basedpyright src tests
           uv run pytest
         working-directory: clients/python
+      # tools/ are typed too; pyrightconfig.json at the repo root covers them.
+      - run: uvx basedpyright
 
   renovate-config:
     name: Validate renovate config

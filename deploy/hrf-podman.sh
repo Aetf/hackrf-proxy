@@ -1,5 +1,5 @@
 #!/bin/sh
-# Run the containerised `hrf` against the real HackRF.
+# Run the containerized `hrf` against the real HackRF.
 #
 #   deploy/hrf-podman.sh info
 #   deploy/hrf-podman.sh capture --seconds 5 --out flame_up.cs8

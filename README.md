@@ -1,5 +1,9 @@
 # hackrf-proxy
 
+[![CI](https://github.com/Aetf/hackrf-proxy/actions/workflows/ci.yml/badge.svg)](https://github.com/Aetf/hackrf-proxy/actions/workflows/ci.yml)
+[![crates.io](https://img.shields.io/crates/v/hackrf-proxyd)](https://crates.io/crates/hackrf-proxyd)
+[![PyPI](https://img.shields.io/pypi/v/hackrf-proxy-client)](https://pypi.org/project/hackrf-proxy-client/)
+
 Make a HackRF One a shared, network-attached RF transceiver — the way an
 ESPHome node is a Bluetooth proxy. A Rust daemon owns the radio and serves a
 WebSocket API that moves raw OOK timings; a Python client library speaks it.
@@ -9,7 +13,7 @@ that wants a sub-GHz OOK radio on the network.
 Two artifacts, released in lockstep from this repository:
 
 - **`hackrf-proxyd`** ([crates.io](https://crates.io/crates/hackrf-proxyd)) —
-  the daemon and the `hrf` CLI. Also published as a ~12 MB container image,
+  the daemon and the `hrf` CLI. Also published as a container image,
   `ghcr.io/aetf/hackrf-proxyd`, and as static musl binaries on each release.
 - **`hackrf-proxy-client`** ([PyPI](https://pypi.org/project/hackrf-proxy-client/))
   — an async Python client: reconnecting connection, id-matched replies,

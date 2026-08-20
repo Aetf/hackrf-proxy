@@ -42,7 +42,7 @@ The `radio_frequency` platform (HA 2026.5, [architecture #1365][arch-1365])
 decouples RF hardware from device logic the way Bluetooth proxies decouple
 BLE radios from device integrations. This daemon slots in as one more
 transmitter; any consumer filtered by frequency range and OOK can use it.
-What the platform does not provide — RX, and a transport for a radio hanging
+What the platform does not provide — RX, and a way to reach a radio hanging
 off another machine's USB port — is exactly what the daemon adds. RX frames
 are re-broadcast by the transmitter integration on a dispatcher signal as an
 interim path; the payload shape matches what #1365 sketches for a future
@@ -63,7 +63,7 @@ bench:
 Decisions that were not obvious and are load-bearing:
 
 - **A dedicated OS thread owns the radio, not a tokio task.** The driver's
-  I/O is blocking and a transmission holds it for the best part of a second.
+  I/O is blocking, and a transmission holds it for the best part of a second.
   Arbitration then needs no locks, since it *is* that thread's control flow;
   and a parked tokio worker would stall unrelated connections.
 - **The streaming receiver cannot reuse the offline threshold logic.** The
@@ -75,7 +75,7 @@ Decisions that were not obvious and are load-bearing:
   identity probe proves nothing; the backoff clears on data, and USB hotplug
   events merely reset the retry timer rather than declaring health.
 - **Pure-Rust USB (nusb), zero C dependencies.** No libhackrf, no SoapySDR,
-  no libudev: the container is a ~12 MB static musl image and the binary
+  no libudev: the container is a small static musl image and the binary
   relocates by copying.
 
 ## Wire protocol and versioning
@@ -87,8 +87,8 @@ compatibility contract is **same semver major**; the client checks the
 daemon's reported version at connect. Wire-protocol changes are breaking
 changes (`feat!:`) by definition.
 
-The two contracts a client must honour, both easy to get wrong in ways that
-appear to work: match replies by id (a transmission's own `device_state`
+The two contracts a client must honor, both easy to get wrong in ways that
+appear to work: match replies by `id` (a transmission's own `device_state`
 event overtakes its reply), and treat availability as following the radio
 rather than the socket (the daemon keeps serving with a faulted radio).
 
@@ -108,10 +108,10 @@ rather than the socket (the daemon keeps serving with a faulted radio).
 
 ## Deployment
 
-`deploy/` carries the Containerfile (two-stage, static musl, ~12 MB), a
+The `deploy/` directory carries the Containerfile (two-stage, static musl), a
 rootless-podman quadlet unit pulling `ghcr.io/aetf/hackrf-proxyd`, the udev
 rule (with the USB-autosuspend and TLP traps documented inline), and a
-wrapper for running the containerised CLI at a bench. The daemon also runs
+wrapper for running the containerized CLI at a bench. The daemon also runs
 fine as a bare static binary. Host sizing: OOK at 2 Msps is a magnitude
 threshold plus pulse widths — about 4% of one small core and 6 MB — but the
 USB bus must sustain 4 MB/s, which rules out single-bus boards that share it
@@ -124,7 +124,7 @@ with their network interface.
   section; a token handshake is the likely shape and will be a protocol
   major bump.
 - **A second receiver.** The HackRF is deaf while it transmits, so questions
-  about reply/echo behaviour of appliances need a receiver that is never the
+  about reply/echo behavior of appliances need a receiver that is never the
   transmitter.
 
 [arch-1365]: https://github.com/home-assistant/architecture/discussions/1365

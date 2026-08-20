@@ -1,0 +1,7 @@
+{
+    "include": ["tools"],
+    "typeCheckingMode": "strict",
+    "reportAny": false,
+    "reportExplicitAny": false,
+    "reportUnusedCallResult": false
+}

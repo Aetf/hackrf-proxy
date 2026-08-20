@@ -498,12 +498,11 @@ impl State {
     ///
     /// Coming out of the fault is deliberately provisional. A HackRF whose
     /// bulk streaming is broken still answers control transfers perfectly
-    /// well, so asking it to identify itself proves almost nothing — on the
-    /// bench laptop that produced 435 faults, 408 of them spaced at exactly the retry
-    /// interval, each one a confident "radio recovered" followed immediately
-    /// by the same failed read. Recovery is only believed once a transfer has
-    /// actually arrived, which is why [`Self::pump`] clears the backoff and
-    /// this does not.
+    /// well, so asking it to identify itself proves almost nothing: each
+    /// retry becomes a confident "radio recovered" followed immediately by
+    /// the same failed read, a fault storm at exactly the retry interval.
+    /// Recovery is only believed once a transfer has actually arrived, which
+    /// is why [`Self::pump`] clears the backoff and this does not.
     fn retry<T: Transceiver>(&mut self, device: &mut T, events: &broadcast::Sender<wire::Message>) {
         if Instant::now() < self.retry_at {
             std::thread::sleep(FAULT_POLL);
@@ -931,12 +930,12 @@ mod tests {
         );
     }
 
-    /// The failure this was written for, observed on the bench laptop: a radio whose
-    /// bulk streaming is broken still answers control transfers, so every
-    /// retry declared success and immediately failed again — 435 faults, 408
-    /// of them spaced at exactly the retry interval, for three and a half
-    /// hours. The backoff has to widen on repeated failure and may only reset
-    /// when a transfer actually arrives.
+    /// The failure this was written for, observed on real hardware: a radio
+    /// whose bulk streaming is broken still answers control transfers, so
+    /// every retry declared success and immediately failed again, a fault
+    /// storm spaced at exactly the retry interval. The backoff has to widen
+    /// on repeated failure and may only reset when a transfer actually
+    /// arrives.
     #[test]
     fn a_radio_that_answers_but_cannot_stream_is_backed_off_rather_than_hammered() {
         let radio = FakeRadio::default();

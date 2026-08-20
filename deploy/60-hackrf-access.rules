@@ -1,31 +1,25 @@
 # Grant read/write access to HackRF device nodes, and keep them awake.
 #
-# The distro hackrf package already ships 53-hackrf.rules, but it grants access
-# with TAG+="uaccess" alone. That is an ACL logind hands to a user with an
-# active local seat, so on a headless machine reached over SSH nothing is
-# granted: the node stays root:root 0664, readable but not writable, and the
-# radio cannot be opened. Symptom: "HackRF is present at /dev/bus/usb/... but
-# could not be opened".
+# Distro hackrf packages typically ship a rule granting access with
+# TAG+="uaccess" alone. That is an ACL logind hands to a user with an active
+# local seat, so on a headless machine reached over SSH nothing is granted:
+# the node stays root:root 0664, readable but not writable, and the radio
+# cannot be opened. Symptom: "HackRF is present at /dev/bus/usb/... but could
+# not be opened".
 #
-# The second job here is USB autosuspend. It is a known HackRF problem and the
-# classic symptom is `hackrf_info` failing once and succeeding immediately
-# afterwards. For a daemon that streams continuously it shows up differently
-# and worse: a suspended device fails its next bulk transfer with "hardware
-# fault or protocol violation", and because control transfers still answer, a
-# naive recovery check thinks the radio is fine and restarts straight into the
-# same failure. We watched exactly that on the bench laptop — 435 faults, 408 of them
-# spaced at precisely the retry interval.
+# The second job here is USB autosuspend, a known HackRF problem. For a daemon
+# that streams continuously the failure mode is nasty: a suspended device
+# fails its next bulk transfer while still answering control transfers, so a
+# recovery check based on identifying the device restarts straight into the
+# same failure.
 #
-# This file supplements rather than replaces the packaged rule, so new device
-# ids keep coming from the package. The higher number makes it win for MODE and
+# This file supplements rather than replaces a packaged rule, so device ids
+# keep coming from the package; the higher number makes it win for MODE and
 # GROUP. Change `wheel` to any group you belong to.
 #
 # Install as root:
 #   cp deploy/60-hackrf-access.rules /etc/udev/rules.d/
 #   udevadm control --reload-rules && udevadm trigger
-#
-# On the aconfmgr-managed homelab this lives in roles/sdr.bash instead; see
-# proxyd/README.md.
 #
 # NOT ENOUGH ON A LAPTOP RUNNING TLP. TLP applies its own USB power policy
 # after udev and will turn autosuspend back on, so the device also has to be
@@ -33,9 +27,9 @@
 #   /etc/tlp.d/10-hackrf.conf:  USB_DENYLIST="1d50:6089"
 #   systemctl restart tlp
 # (`USB_DENYLIST` since TLP 1.4; older versions call it `USB_BLACKLIST`.)
-# Access. Left exactly as it was when it was proven to work, rather than having
-# power management folded into the same lines where a mistake would take the
-# permissions down with it.
+
+# Access. Kept on separate lines from power management, so a mistake in one
+# cannot take the other down with it.
 ATTR{idVendor}=="1d50", ATTR{idProduct}=="6089", MODE="0660", GROUP="wheel"
 ATTR{idVendor}=="1d50", ATTR{idProduct}=="604b", MODE="0660", GROUP="wheel"
 ATTR{idVendor}=="1d50", ATTR{idProduct}=="cc15", MODE="0660", GROUP="wheel"

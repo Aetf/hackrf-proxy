@@ -29,7 +29,7 @@ Issues = "https://github.com/Aetf/hackrf-proxy/issues"
 Changelog = "https://github.com/Aetf/hackrf-proxy/blob/main/CHANGELOG.md"
 
 [dependency-groups]
-dev = ["pytest>=8", "pytest-aiohttp>=1.0"]
+dev = ["pytest>=8", "pytest-aiohttp>=1.0", "basedpyright>=1.29"]
 
 # The client is versioned in lockstep with the daemon: both come from the
 # repository's vX.Y.Z tag, which release-plz derives from Cargo.toml. The
@@ -52,3 +52,11 @@ ignore = ["D203", "D213", "D401"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+[tool.basedpyright]
+typeCheckingMode = "strict"
+# basedpyright's opinions beyond pyright strict; prose-typed code keeps Any at
+# the JSON boundary on purpose.
+reportAny = false
+reportExplicitAny = false
+reportUnusedCallResult = false

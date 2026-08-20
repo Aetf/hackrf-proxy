@@ -1,15 +1,21 @@
 """The client against a scripted daemon, and the cross-language protocol pin."""
 
+# The tests exercise the module's internals on purpose.
+# pyright: reportPrivateUsage=false
+
 from __future__ import annotations
 
 import asyncio
 import json
 import re
+from collections.abc import Callable
 from pathlib import Path
+from typing import Any, cast
 
 import aiohttp
 import pytest
 from aiohttp import web
+from aiohttp.pytest_plugin import AiohttpServer
 
 from hackrf_proxy_client import PROTOCOL_VERSION, ProxyClient, ProxyError
 from hackrf_proxy_client.client import _semver_major
@@ -41,7 +47,7 @@ class ScriptedDaemon:
 
     def __init__(self, daemon_version: str = "0.0.0") -> None:
         self.daemon_version = daemon_version
-        self.transmits: list[dict] = []
+        self.transmits: list[dict[str, Any]] = []
         self._socket: web.WebSocketResponse | None = None
 
     async def handler(self, request: web.Request) -> web.WebSocketResponse:
@@ -51,8 +57,8 @@ class ScriptedDaemon:
         async for message in socket:
             if message.type is not aiohttp.WSMsgType.TEXT:
                 continue
-            payload = json.loads(message.data)
-            reply = {"id": payload["id"]}
+            payload: dict[str, Any] = json.loads(message.data)
+            reply: dict[str, Any] = {"id": payload["id"]}
             if payload["type"] == "status":
                 reply |= {
                     "type": "status",
@@ -71,25 +77,31 @@ class ScriptedDaemon:
             await socket.send_json(reply)
         return socket
 
-    async def push(self, payload: dict) -> None:
+    async def push(self, payload: dict[str, Any]) -> None:
         assert self._socket is not None
         await self._socket.send_json(payload)
 
 
 async def _connected_client(
-    aiohttp_server, daemon: ScriptedDaemon, **kwargs
+    aiohttp_server: AiohttpServer,
+    daemon: ScriptedDaemon,
+    *,
+    on_rx_frame: Callable[[dict[str, Any]], None] | None = None,
 ) -> tuple[ProxyClient, aiohttp.ClientSession]:
     app = web.Application()
     app.router.add_get("/", daemon.handler)
     server = await aiohttp_server(app)
+    # TestServer.port is only partially typed upstream; it is an int once the
+    # server has started, and it has.
+    port = cast(int, server.port)
     session = aiohttp.ClientSession()
-    client = ProxyClient(session, server.host, server.port, **kwargs)
+    client = ProxyClient(session, server.host, port, on_rx_frame=on_rx_frame)
     await client.async_start()
     await client.async_wait_connected(timeout=5)
     return client, session
 
 
-async def test_connects_and_reports_the_daemon(aiohttp_server) -> None:
+async def test_connects_and_reports_the_daemon(aiohttp_server: AiohttpServer) -> None:
     daemon = ScriptedDaemon()
     client, session = await _connected_client(aiohttp_server, daemon)
     try:
@@ -103,7 +115,9 @@ async def test_connects_and_reports_the_daemon(aiohttp_server) -> None:
         await session.close()
 
 
-async def test_transmit_returns_air_time_despite_overtaking_events(aiohttp_server) -> None:
+async def test_transmit_returns_air_time_despite_overtaking_events(
+    aiohttp_server: AiohttpServer,
+) -> None:
     daemon = ScriptedDaemon()
     client, session = await _connected_client(aiohttp_server, daemon)
     try:
@@ -120,9 +134,9 @@ async def test_transmit_returns_air_time_despite_overtaking_events(aiohttp_serve
         await session.close()
 
 
-async def test_rx_frames_reach_the_callback(aiohttp_server) -> None:
+async def test_rx_frames_reach_the_callback(aiohttp_server: AiohttpServer) -> None:
     daemon = ScriptedDaemon()
-    heard: list[dict] = []
+    heard: list[dict[str, Any]] = []
     client, session = await _connected_client(aiohttp_server, daemon, on_rx_frame=heard.append)
     try:
         await daemon.push({"type": "rx_frame", "frequency": 315_000_000, "timings": [450, -450]})
@@ -136,7 +150,7 @@ async def test_rx_frames_reach_the_callback(aiohttp_server) -> None:
         await session.close()
 
 
-async def test_a_different_major_reads_as_incompatible(aiohttp_server) -> None:
+async def test_a_different_major_reads_as_incompatible(aiohttp_server: AiohttpServer) -> None:
     daemon = ScriptedDaemon(daemon_version="99.0.0")
     client, session = await _connected_client(aiohttp_server, daemon)
     try:

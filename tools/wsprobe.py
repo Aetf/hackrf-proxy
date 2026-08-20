@@ -14,6 +14,8 @@ then keeps printing pushed events until interrupted, which is how you watch
 what the receiver is hearing while pressing a remote.
 """
 
+from __future__ import annotations
+
 import argparse
 import base64
 import json
@@ -21,6 +23,7 @@ import os
 import socket
 import struct
 import sys
+from typing import Any
 
 TEXT, CLOSE, PING, PONG = 0x1, 0x8, 0x9, 0xA
 
@@ -28,7 +31,7 @@ TEXT, CLOSE, PING, PONG = 0x1, 0x8, 0x9, 0xA
 class WebSocket:
     """Just enough of RFC 6455 to speak JSON to the daemon."""
 
-    def __init__(self, host, port, timeout):
+    def __init__(self, host: str, port: int, timeout: float) -> None:
         self.sock = socket.create_connection((host, port), timeout=timeout)
         key = base64.b64encode(os.urandom(16)).decode()
         self.sock.sendall(
@@ -36,7 +39,7 @@ class WebSocket:
             f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\n"
             f"Sec-WebSocket-Version: 13\r\n\r\n".encode()
         )
-        self.buffer = b""
+        self.buffer: bytes = b""
         header, rest = self._until(b"\r\n\r\n")
         status = header.split(b"\r\n")[0].decode(errors="replace")
         if b"101" not in header.split(b"\r\n")[0]:
@@ -47,7 +50,7 @@ class WebSocket:
         # went past.
         self.buffer = rest
 
-    def _until(self, marker):
+    def _until(self, marker: bytes) -> tuple[bytes, bytes]:
         """Read up to and including `marker`, returning it and the remainder."""
         data = b""
         while marker not in data:
@@ -58,7 +61,7 @@ class WebSocket:
         head, _, rest = data.partition(marker)
         return head + marker, rest
 
-    def _read(self, count):
+    def _read(self, count: int) -> bytes:
         while len(self.buffer) < count:
             chunk = self.sock.recv(65536)
             if not chunk:
@@ -67,7 +70,7 @@ class WebSocket:
         head, self.buffer = self.buffer[:count], self.buffer[count:]
         return head
 
-    def send(self, text):
+    def send(self, text: str) -> None:
         payload = text.encode()
         length = len(payload)
         if length < 126:
@@ -80,7 +83,7 @@ class WebSocket:
         masked = bytes(byte ^ mask[i % 4] for i, byte in enumerate(payload))
         self.sock.sendall(header + mask + masked)
 
-    def close(self):
+    def close(self) -> None:
         """Close politely, so the daemon logs a disconnect and not an error."""
         try:
             self.sock.sendall(struct.pack("!BB", 0x80 | CLOSE, 0x80) + os.urandom(4))
@@ -88,7 +91,7 @@ class WebSocket:
         except OSError:
             pass
 
-    def recv(self):
+    def recv(self) -> str:
         """Return the next text message, answering pings along the way."""
         while True:
             first, second = struct.unpack("!BB", self._read(2))
@@ -108,10 +111,9 @@ class WebSocket:
                 raise SystemExit("server closed the connection")
 
 
-def show(direction, text):
+def show(direction: str, text: str) -> Any:
     # Flushed every time: piped to a file, Python block-buffers stdout, and a
     # monitor whose output only appears when it exits is no monitor at all.
-    # This cost us a set of captured frames once.
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
@@ -121,7 +123,7 @@ def show(direction, text):
     return parsed
 
 
-def await_reply(socket_, request_id):
+def await_reply(socket_: WebSocket, request_id: str) -> Any:
     """Read until the reply to `request_id` arrives, printing events meanwhile.
 
     The daemon pushes events at any time, so a reply is not necessarily the
@@ -135,7 +137,7 @@ def await_reply(socket_, request_id):
             return message
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("requests", nargs="*", help="raw JSON requests to send")
     parser.add_argument("--host", default="127.0.0.1")
