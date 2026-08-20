@@ -7,6 +7,15 @@ name: Release artifacts
 on:
   push:
     tags: ["v[0-9]+.[0-9]+.[0-9]+"]
+  # Recovery hatch: republish the Python client for an existing release when
+  # its publish step failed but the tag (and the crate) are already out. Runs
+  # from the chosen ref with the version forced, so a packaging fix on main
+  # can ship under the tag's version number.
+  workflow_dispatch:
+    inputs:
+      pypi-version:
+        description: "Publish the Python client as this exact version (e.g. 0.1.0)"
+        required: true
 
 env:
   IMAGE: ghcr.io/aetf/hackrf-proxyd
@@ -24,14 +33,20 @@ jobs:
           # hatch-vcs takes the version from the tag.
           fetch-depth: 0
       - uses: astral-sh/setup-uv@v6
-      - run: uv build
+      - name: Build
         working-directory: clients/python
+        run: |
+          if [ -n "${{ github.event.inputs.pypi-version || '' }}" ]; then
+            export SETUPTOOLS_SCM_PRETEND_VERSION="${{ github.event.inputs.pypi-version }}"
+          fi
+          uv build
       - uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: clients/python/dist
 
   binaries:
     name: Static binary ${{ matrix.target }}
+    if: github.event_name == 'push'
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: write
@@ -62,6 +77,7 @@ jobs:
 
   container:
     name: Container ${{ matrix.arch }}
+    if: github.event_name == 'push'
     runs-on: ${{ matrix.runner }}
     permissions:
       packages: write
