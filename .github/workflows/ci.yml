@@ -115,8 +115,9 @@ jobs:
           uv run basedpyright src tests
           uv run pytest
         working-directory: clients/python
-      # tools/ are typed too; pyrightconfig.json at the repo root covers them.
-      - run: uvx basedpyright
+      # brand/ and tools/ are typed too; pyrightconfig.json at the repo root
+      # covers them, and the mark generator needs Pillow to resolve.
+      - run: uvx --with pillow basedpyright
 
   renovate-config:
     name: Validate renovate config

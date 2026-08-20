@@ -1,5 +1,8 @@
 {
-    "include": ["tools"],
+    "include": [
+        "brand",
+        "tools"
+    ],
     "typeCheckingMode": "strict",
     "reportAny": false,
     "reportExplicitAny": false,
