@@ -1,4 +1,0 @@
-# Lives next to the root Cargo.toml, which is proxyd/ in this repository.
-[workspace]
-# Keep the changelog at the repository root rather than inside the crate.
-changelog_path = "../CHANGELOG.md"

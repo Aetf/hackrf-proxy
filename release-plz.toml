@@ -1,0 +1,4 @@
+# Discovered from the repository root (the action's working directory).
+[workspace]
+# The crate lives in proxyd/; keep the changelog at the repository root.
+changelog_path = "CHANGELOG.md"
