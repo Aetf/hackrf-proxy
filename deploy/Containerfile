@@ -4,7 +4,7 @@
 # The driver is pure Rust on nusb, so the result is a static musl binary with no
 # libusb, no SoapySDR and no shared libraries to keep in sync with the host.
 
-FROM docker.io/library/rust:1.97-alpine AS builder
+FROM docker.io/library/rust:1.98-alpine AS builder
 RUN apk add --no-cache musl-dev
 WORKDIR /build
 COPY proxyd/Cargo.toml proxyd/Cargo.lock ./
