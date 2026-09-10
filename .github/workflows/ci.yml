@@ -107,7 +107,7 @@ jobs:
         with:
           # hatch-vcs derives the version from git history.
           fetch-depth: 0
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: astral-sh/setup-uv@v10.1.0
       - run: uvx ruff check .
         working-directory: clients/python
       - run: |
