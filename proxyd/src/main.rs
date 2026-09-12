@@ -189,8 +189,9 @@ enum Command {
         /// Extra repetitions of the frame (0 sends it once).
         #[arg(long, default_value_t = 4)]
         repeat: u32,
-        /// Silence inserted between repetitions.
-        #[arg(long, default_value_t = 10_000)]
+        /// Silence inserted between repetitions; 0 sends them back-to-back,
+        /// as the daemon does unless a request asks otherwise.
+        #[arg(long, default_value_t = 0)]
         gap_us: u32,
         /// JSON array of signed microseconds: positive is carrier on.
         #[arg(long)]

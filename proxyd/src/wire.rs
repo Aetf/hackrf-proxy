@@ -55,8 +55,11 @@ pub struct Transmit {
     /// Extra repetitions; 0 sends the frame once.
     #[serde(default)]
     pub repeat: u32,
-    /// Silence between repetitions.
-    #[serde(default = "default_gap_us")]
+    /// Silence between repetitions. Absent means none: repeats go out
+    /// back-to-back, the way ESPHome's remote_transmitter sends them, and a
+    /// protocol that needs a pause between frames carries it in its own
+    /// timings, where the sending client knows its length.
+    #[serde(default)]
     pub gap_us: u32,
     /// TX VGA gain in dB, 0..=47. Defaults to the daemon's configured gain.
     #[serde(default)]
@@ -65,10 +68,6 @@ pub struct Transmit {
     /// buys nothing and splatters.
     #[serde(default)]
     pub amp: bool,
-}
-
-fn default_gap_us() -> u32 {
-    10_000
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -289,6 +288,7 @@ mod tests {
         };
         assert_eq!(transmit.timings, vec![500, -500]);
         assert_eq!(transmit.repeat, 0);
+        assert_eq!(transmit.gap_us, 0, "repeats are back-to-back unless a gap is asked for");
         assert!(!transmit.amp, "the power amplifier stays off unless asked for");
     }
 
@@ -377,7 +377,7 @@ mod tests {
             frequency: 315_000_000,
             timings,
             repeat: 0,
-            gap_us: 10_000,
+            gap_us: 0,
             txvga_db: None,
             amp: false,
         }

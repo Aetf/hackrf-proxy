@@ -71,9 +71,13 @@ Requests:
 
 | type | fields |
 |------|--------|
-| `transmit` | `frequency`, `timings[]`, `repeat`, `gap_us`, `txvga_db?`, `amp?` |
+| `transmit` | `frequency`, `timings[]`, `repeat`, `gap_us?`, `txvga_db?`, `amp?` |
 | `configure_rx` | `frequency?`, `enabled` |
 | `status` | — |
+
+`repeat` is the number of extra repetitions and `gap_us` the silence between
+them, none unless given: repeats go out back-to-back, and a protocol that wants
+a pause between frames carries it in its own timings.
 
 Replies are `transmitted{duration_us}`, `status{...}` or `error{message}`.
 Server-pushed events are `rx_frame{frequency, timings, rssi, timestamp_ms}` and
