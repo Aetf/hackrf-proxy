@@ -23,7 +23,7 @@ env:
 jobs:
   publish-pypi:
     name: Publish hackrf-proxy-client
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       # PyPI trusted publishing (OIDC): no long-lived token to leak.
       id-token: write
@@ -100,7 +100,7 @@ jobs:
 
   container-manifest:
     name: Container manifest
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     needs: container
     permissions:
       packages: write
