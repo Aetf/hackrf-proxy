@@ -18,7 +18,7 @@ env:
 jobs:
   rustfmt:
     name: Rustfmt
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -28,7 +28,7 @@ jobs:
 
   clippy:
     name: Clippy ${{ matrix.toolchain }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
       matrix:
@@ -74,7 +74,7 @@ jobs:
 
   deps:
     name: Dependency graph
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
@@ -97,7 +97,7 @@ jobs:
 
   python-client:
     name: Python client ${{ matrix.python }}
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     strategy:
       fail-fast: false
       matrix:
@@ -121,7 +121,7 @@ jobs:
 
   renovate-config:
     name: Validate renovate config
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     steps:
       - uses: actions/checkout@v7
       - run: npx --yes --package renovate -- renovate-config-validator --strict
